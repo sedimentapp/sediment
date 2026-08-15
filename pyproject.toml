@@ -1,0 +1,12 @@
+[tool.uv.workspace]
+members = ["packages/*", "ee/*"]
+
+[tool.uv.sources]
+knowledge-schema = { workspace = true }
+sediment-mcp = { workspace = true }
+sediment-mcp-ee-license = { workspace = true }
+
+[tool.basedpyright]
+include = ["packages", "ee"]
+typeCheckingMode = "standard"
+pythonVersion = "3.14"

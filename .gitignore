@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+*.egg-info/
+build/
+dist/
+.env
+.venv/
+.claude/
+.mcp.json
+trunk/
+_profile.yaml
+.helmwave/

@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% block title %}ACL history — sediment admin{% endblock %}
+{% block content %}
+<h1>ACL versions</h1>
+<table>
+<tr><th class="num">Version</th><th>Author</th><th>Saved at</th><th></th></tr>
+{% for v in versions %}
+<tr>
+  <td class="num">{{ v.version }}{% if v.version == latest_version %} <span class="badge">active</span>{% endif %}</td>
+  <td>{{ v.author }}</td>
+  <td>{{ v.created_at|iso }}</td>
+  <td><a href="/admin/acl/history?v={{ v.version }}">view</a></td>
+</tr>
+{% else %}
+<tr><td colspan="4" class="muted">No versions yet.</td></tr>
+{% endfor %}
+</table>
+
+{% if selected %}
+<h2>Version {{ selected.version }} <span class="muted">by {{ selected.author }}, {{ selected.created_at|iso }}</span></h2>
+{% if selected.version != latest_version %}
+<form method="post" action="/admin/acl/restore">
+  <input type="hidden" name="csrf" value="{{ csrf }}">
+  <input type="hidden" name="version" value="{{ selected.version }}">
+  <p><button>Restore this version</button> <span class="muted">— saved as a new version, applied immediately</span></p>
+</form>
+{% endif %}
+<pre class="yaml-view">{{ selected.yaml_text }}</pre>
+{% endif %}
+{% endblock %}

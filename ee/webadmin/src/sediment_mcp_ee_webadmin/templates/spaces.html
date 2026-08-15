@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block title %}{{ report.collection }} — sediment admin{% endblock %}
+{% block content %}
+<h1>{{ report.collection }} — spaces</h1>
+<p class="muted">{{ report.rows|length }} spaces, {{ "{:,}".format(report.points_count) }} points</p>
+{% if not report.ts_indexed %}
+<div class="warn">No integer index on <code>ts</code> in this collection — freshness is unavailable.
+The next <code>sediment-load</code> run creates it (<code>ensure_payload_indexes</code>).</div>
+{% endif %}
+{% if report.unspaced > 0 %}
+<div class="warn">{{ "{:,}".format(report.unspaced) }} points have no <code>space</code> payload —
+they are invisible under ACL enforcement; run <code>sediment-backfill-acl</code>.</div>
+{% endif %}
+<table>
+<tr><th>Space</th><th>Name</th><th>Source</th><th class="num">Points</th><th>Last activity</th></tr>
+{% for r in report.rows %}
+<tr>
+  <td><code>{{ r.space }}</code></td>
+  <td>{{ r.name or "" }}</td>
+  <td>{{ r.source or "?" }}</td>
+  <td class="num">{{ "{:,}".format(r.points) }}</td>
+  <td title="{{ r.last_ts|iso }}">{{ r.last_ts|age }}</td>
+</tr>
+{% else %}
+<tr><td colspan="5" class="muted">No spaces (empty collection?).</td></tr>
+{% endfor %}
+</table>
+{% endblock %}

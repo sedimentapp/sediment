@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+{% block title %}access — sediment admin{% endblock %}
+{% block content %}
+<h1>Access simulator</h1>
+{% if not acl_enabled %}
+<div class="warn">ACL is explicitly disabled (<code>MCP_ACL_DISABLE=1</code>) —
+every authenticated principal can read and write every collection.</div>
+{% else %}
+
+<h2>Principal → grant</h2>
+<form class="inline" method="get" action="/admin/access">
+  <input type="text" name="principal" placeholder="github login / static token name" value="{{ principal_q }}">
+  <button>Resolve</button>
+</form>
+<p class="muted">Known principals:
+{% for p in known_principals %}<a href="/admin/access?principal={{ p }}"><code>{{ p }}</code></a>{% if not loop.last %}, {% endif %}{% endfor %}
+</p>
+{% if grant is not none %}
+  {% if not grant.collections %}
+  <div class="warn"><code>{{ principal_q }}</code> matches no grant — deny-by-default, no access at all.</div>
+  {% else %}
+  <table>
+    <tr><th>Read collections</th><td>{% for c in grant.collections %}<span class="badge">{{ c }}</span>{% endfor %}</td></tr>
+    <tr><th>Write collections</th><td>{% for c in grant.write %}<span class="badge">{{ c }}</span>{% else %}<span class="muted">none</span>{% endfor %}</td></tr>
+    <tr><th>Spaces</th><td>
+      {% if grant.spaces is none %}
+        <strong>unrestricted (*)</strong> — every space, including DMs and personal ones
+      {% else %}
+        {% for s in grant.spaces %}<code>{{ s }}</code>{% if not loop.last %}, {% endif %}{% endfor %}
+        <div class="muted">plus manual entries with <code>visibility=org</code></div>
+      {% endif %}
+    </td></tr>
+  </table>
+  {% endif %}
+{% endif %}
+
+<h2>Space → who sees it</h2>
+<form class="inline" method="get" action="/admin/access">
+  <input type="text" name="space" placeholder="mm:&lt;channel_id&gt; / yt:INF / tg:&lt;chat_id&gt; / cc:&lt;project&gt; / manual:&lt;user&gt;" value="{{ space_q }}">
+  <button>Check</button>
+</form>
+{% if viewers is not none %}
+  {% if viewers %}
+  <table>
+  <tr><th>Principal</th><th>Via</th><th>Collections</th></tr>
+  {% for v in viewers %}
+  <tr>
+    <td><a href="/admin/access?principal={{ v.principal }}"><code>{{ v.principal }}</code></a></td>
+    <td>{{ v.via }}</td>
+    <td>{% for c in v.collections %}<span class="badge">{{ c }}</span>{% endfor %}</td>
+  </tr>
+  {% endfor %}
+  </table>
+  {% else %}
+  <p>No principal sees <code>{{ space_q }}</code>.</p>
+  {% endif %}
+{% endif %}
+{% endif %}
+{% endblock %}

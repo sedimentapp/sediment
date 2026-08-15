@@ -1,0 +1,27 @@
+[project]
+name = "sediment-mcp"
+version = "0.1.0"
+description = "MCP server exposing sediment's Qdrant knowledge base over Streamable HTTP"
+license = "Apache-2.0"
+requires-python = ">=3.14"
+dependencies = [
+    "fastmcp>=3,<4",
+    "knowledge-schema",
+    "python-dotenv",
+    "qdrant-client",
+]
+
+[project.scripts]
+sediment-mcp-serve = "sediment_mcp.server:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/sediment_mcp"]
+
+[dependency-groups]
+test = [
+    "pytest>=8",
+]

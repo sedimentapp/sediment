@@ -1,0 +1,65 @@
+name: sediment-mcp — Test and Publish image
+
+# Build CI for the private mirror. It publishes the image an installation
+# deploys; deployment itself lives in the installation repository, which pins
+# the tag produced here. The registry host is a repo variable so this file
+# carries no installation specifics.
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - master
+    paths:
+      - packages/sediment-mcp/**
+      - packages/knowledge-schema/**
+      - ee/**
+      - pyproject.toml
+      - uv.lock
+      - .forgejo/workflows/sediment-mcp.yml
+
+jobs:
+  test:
+    runs-on: docker
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Install pinned CI tools
+        run: |
+          .forgejo/scripts/install-ci-tools.sh
+          echo "$HOME/.local/bin" >> $GITHUB_PATH
+
+      - name: Run tests, Ruff and basedpyright
+        run: |
+          uv sync --all-packages --no-default-groups --group test
+          uv run --no-sync pytest packages ee
+          uv run --no-dev --with ruff==0.15.11 ruff check .
+          uv run --no-dev --with basedpyright==1.39.3 basedpyright
+
+  build-and-push:
+    needs: test
+    runs-on: docker
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Install pinned CI tools
+        run: |
+          .forgejo/scripts/install-ci-tools.sh
+          echo "$HOME/.local/bin" >> $GITHUB_PATH
+
+      - name: Log in to the container registry
+        run: echo "${{ secrets.REGISTRY_TOKEN }}" | docker login ${{ vars.REGISTRY }} -u ${{ github.actor }} --password-stdin
+
+      - name: Build and push
+        run: |
+          # sha-<short> rather than a run id: the tag names the commit it was
+          # built from, so the deployed version can be traced back to code.
+          TAG="sha-$(echo ${{ github.sha }} | cut -c1-7)"
+          IMAGE=${{ vars.REGISTRY }}/${{ vars.IMAGE_PREFIX }}/sediment-mcp
+          docker build -f packages/sediment-mcp/Dockerfile -t $IMAGE:$TAG .
+          docker push $IMAGE:$TAG
+          echo "Pushed $IMAGE:$TAG"

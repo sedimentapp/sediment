@@ -1,0 +1,79 @@
+name: sediment — Test & Publish image
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - master
+    paths:
+      - packages/sediment/**
+      - packages/knowledge-schema/**
+      - pyproject.toml
+      - uv.lock
+      - .github/workflows/sediment.yml
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository_owner }}/sediment
+
+jobs:
+  test:
+    # The private mirror lives on Forgejo and has its own deploy CI under
+    # .forgejo/workflows, so this workflow must stay quiet there. The condition
+    # allows any fork on github.com and excludes non-GitHub instances.
+    if: github.server_url == 'https://github.com'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.14"
+
+      - name: Run tests, Ruff and basedpyright
+        run: |
+          uv sync --all-packages --no-default-groups --group test
+          uv run --no-sync pytest packages ee
+          uv run --no-dev --with ruff==0.15.11 ruff check .
+          uv run --no-dev --with basedpyright==1.39.3 basedpyright
+
+  build-and-push:
+    # The private mirror lives on Forgejo and has its own deploy CI under
+    # .forgejo/workflows, so this workflow must stay quiet there. The condition
+    # allows any fork on github.com and excludes non-GitHub instances.
+    if: github.server_url == 'https://github.com'
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=sha
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: packages/sediment/Dockerfile
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}

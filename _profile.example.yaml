@@ -1,0 +1,26 @@
+# Example local dev profile, used by `--config-dir .` of raw-fetch/sediment-load.
+# Copy it to _profile.yaml (gitignored) and put your own paths in.
+# In production this file comes from a ConfigMap.
+
+# Collections loaded by sediment-load. Host-independent: list every source that
+# may end up in the collection's vault on any host — raw directories that are
+# missing here are simply skipped.
+collections:
+  acme:
+    sources: [claude, telegram]
+
+# A profile name matches its collection name; raw_dir is derived from
+# raw_dir (<vault_path>/raw).
+profiles:
+  acme:
+    vault_path: ~/knowledge/acme
+    claude:
+      projects_path: ~/.claude/projects
+      pattern: "-home-user-code-acme*"
+      exclude:
+        - scratch
+    telegram:
+      api_id_env: TELEGRAM_API_ID
+      api_hash_env: TELEGRAM_API_HASH
+      session_path: ~/.telegram_session
+      chats: []

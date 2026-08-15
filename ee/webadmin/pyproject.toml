@@ -1,0 +1,29 @@
+[project]
+name = "sediment-mcp-ee-webadmin"
+version = "0.1.0"
+description = "Web admin UI for sediment-mcp (ee): collections overview, spaces inventory, ACL simulator"
+license = "Elastic-2.0"
+requires-python = ">=3.14"
+dependencies = [
+    "fastmcp>=3,<4",
+    "httpx",
+    "jinja2>=3",
+    "qdrant-client",
+    "sediment-mcp",
+    "sediment-mcp-ee-license",
+]
+
+[project.entry-points."sediment_mcp.extensions"]
+webadmin = "sediment_mcp_ee_webadmin.app:register"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/sediment_mcp_ee_webadmin"]
+
+[dependency-groups]
+test = [
+    "pytest>=8",
+]

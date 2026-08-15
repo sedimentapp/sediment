@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Collections</h1>
+<table>
+<tr><th>Collection</th><th>Status</th><th class="num">Points</th><th>By source</th></tr>
+{% for c in collections %}
+<tr>
+  <td><a href="/admin/collections/{{ c.name }}">{{ c.name }}</a></td>
+  <td><span class="status-{{ c.status }}">●</span> {{ c.status }}</td>
+  <td class="num">{{ "{:,}".format(c.points_count) }}</td>
+  <td>{% for source, count in c.by_source.items() %}<span class="badge">{{ source }}: {{ "{:,}".format(count) }}</span>{% endfor %}</td>
+</tr>
+{% else %}
+<tr><td colspan="4" class="muted">No collections.</td></tr>
+{% endfor %}
+</table>
+{% endblock %}

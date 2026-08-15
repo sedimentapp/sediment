@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+{% block title %}audit — sediment admin{% endblock %}
+{% block content %}
+<h1>Usage audit</h1>
+{% if not enabled %}
+<div class="warn">Audit is disabled — set <code>MCP_AUDIT_DB</code> to a SQLite path to record MCP tool calls.</div>
+{% else %}
+
+<h2>Last 7 days</h2>
+<table>
+<tr><th>Principal</th><th>Tool</th><th class="num">Calls</th></tr>
+{% for principal, tool, count in stats %}
+<tr>
+  <td><a href="/admin/audit?principal={{ principal }}"><code>{{ principal }}</code></a></td>
+  <td><a href="/admin/audit?tool={{ tool|urlencode }}">{{ tool }}</a></td>
+  <td class="num">{{ "{:,}".format(count) }}</td>
+</tr>
+{% else %}
+<tr><td colspan="3" class="muted">No calls recorded yet.</td></tr>
+{% endfor %}
+</table>
+
+<h2>Events</h2>
+<form class="inline" method="get" action="/admin/audit">
+  <input type="text" name="principal" placeholder="principal" value="{{ principal_q }}">
+  <input type="text" name="tool" placeholder="tool" value="{{ tool_q }}">
+  <input type="text" name="limit" placeholder="limit" value="{{ limit }}" style="min-width: 5rem; width: 6rem;">
+  <button>Filter</button>
+  <a href="/admin/audit.csv?principal={{ principal_q|urlencode }}&amp;tool={{ tool_q|urlencode }}"
+     style="align-self: center;">Download CSV</a>
+  {% if principal_q or tool_q %}<a href="/admin/audit" style="align-self: center;">reset</a>{% endif %}
+</form>
+<p class="muted">The CSV holds the whole retained log matching the current filters
+(retention: <code>MCP_AUDIT_RETENTION_DAYS</code>), not just the {{ limit }} rows shown.</p>
+<table>
+<tr><th>When</th><th>Principal</th><th>Tool</th><th>Collection</th><th>Args</th><th class="num">ms</th><th></th></tr>
+{% for e in events %}
+<tr>
+  <td title="{{ e.ts|iso }}">{{ e.ts|age }}</td>
+  <td><code>{{ e.principal }}</code></td>
+  <td>{{ e.tool }}</td>
+  <td>{% if e.collection %}<span class="badge">{{ e.collection }}</span>{% endif %}</td>
+  <td><code>{{ e.detail | compact_json }}</code></td>
+  <td class="num">{{ e.duration_ms }}</td>
+  <td>{% if not e.ok %}<span class="badge flag" title="{{ e.error }}">error</span>{% endif %}</td>
+</tr>
+{% else %}
+<tr><td colspan="7" class="muted">Nothing matches.</td></tr>
+{% endfor %}
+</table>
+{% endif %}
+{% endblock %}

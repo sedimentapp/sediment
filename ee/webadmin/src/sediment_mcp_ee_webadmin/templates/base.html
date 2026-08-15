@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% block title %}sediment admin{% endblock %}</title>
+<style>
+:root {
+  color-scheme: light dark;
+  --bg: #f4f5f8;
+  --panel: #ffffff;
+  --border: #e0e4ea;
+  --text: #1d2431;
+  --muted: #69748a;
+  --accent: #3b5bdb;
+  --accent-contrast: #ffffff;
+  --accent-soft: rgba(59, 91, 219, .09);
+  --warn-bg: #fbf3da;
+  --warn-border: #e3c96f;
+  --ok: #2f9e63;
+  --bad: #c04444;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #13161b;
+    --panel: #1c2027;
+    --border: #313845;
+    --text: #e7eaf0;
+    --muted: #9aa4b5;
+    --accent: #8aa2f2;
+    --accent-contrast: #10131a;
+    --accent-soft: rgba(138, 162, 242, .13);
+    --warn-bg: #37301a;
+    --warn-border: #6b5c2a;
+    --ok: #57bd85;
+    --bad: #e07a7a;
+  }
+}
+* { box-sizing: border-box; }
+body { font: 15px/1.55 system-ui, sans-serif; background: var(--bg); color: var(--text);
+  margin: 0 auto; max-width: 76rem; padding: 1.25rem 1.5rem 3rem; }
+h1 { font-size: 1.35rem; margin: 1.4rem 0 .9rem; }
+h2 { font-size: 1.05rem; margin: 2rem 0 .6rem; }
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+nav { display: flex; gap: .25rem; align-items: center; background: var(--panel);
+  border: 1px solid var(--border); border-radius: 12px; padding: .45rem .7rem; }
+nav .brand { font-weight: 700; padding: 0 .9rem 0 .4rem; }
+nav a { color: var(--text); padding: .35rem .85rem; border-radius: 8px; font-weight: 500; }
+nav a:hover { background: var(--accent-soft); text-decoration: none; }
+nav a.active { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+nav .spacer { flex: 1; }
+nav .who { color: var(--muted); padding-right: .6rem; }
+table { border-collapse: separate; border-spacing: 0; width: 100%; margin: .9rem 0 1.4rem;
+  background: var(--panel); border: 1px solid var(--border); border-radius: 12px; overflow: hidden; }
+th, td { text-align: left; padding: .5rem .8rem; border-bottom: 1px solid var(--border); vertical-align: top; }
+tr:last-child th, tr:last-child td { border-bottom: none; }
+th { font-size: .78em; text-transform: uppercase; letter-spacing: .05em; color: var(--muted);
+  background: color-mix(in srgb, var(--border) 30%, transparent); }
+td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+tr:hover td { background: color-mix(in srgb, var(--accent) 4%, transparent); }
+.badge { display: inline-block; padding: .1rem .6rem; border-radius: 999px; font-size: .82em;
+  margin: 0 .25rem .2rem 0; white-space: nowrap;
+  background: color-mix(in srgb, var(--muted) 13%, transparent); }
+a .badge { color: var(--accent); background: var(--accent-soft); }
+.badge.flag { background: var(--warn-bg); border: 1px solid var(--warn-border); }
+.muted { color: var(--muted); }
+.warn { background: var(--warn-bg); border: 1px solid var(--warn-border);
+  padding: .6rem .9rem; border-radius: 10px; margin: .9rem 0; }
+code { font-size: .9em; background: color-mix(in srgb, var(--muted) 10%, transparent);
+  padding: .08em .35em; border-radius: 6px; }
+.status-green { color: var(--ok); }
+.status-yellow { color: #d99a2b; }
+.status-red, .status-grey { color: var(--bad); }
+form.inline { display: flex; gap: .6rem; margin: .7rem 0 1.1rem; }
+input[type="text"], textarea { font: inherit; color: var(--text); background: var(--panel);
+  border: 1.5px solid var(--border); border-radius: 9px; padding: .45rem .75rem; }
+input[type="text"] { min-width: 22rem; }
+input:focus-visible, textarea:focus-visible { outline: none; border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft); }
+button { font: inherit; font-weight: 600; color: var(--accent-contrast); background: var(--accent);
+  border: none; border-radius: 9px; padding: .45rem 1.1rem; cursor: pointer; }
+button:hover { filter: brightness(1.07); }
+button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+textarea.editor { width: 100%; font: 13px/1.5 ui-monospace, "Cascadia Mono", monospace; padding: .7rem .9rem; }
+pre.yaml-view { background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
+  padding: .9rem 1.1rem; overflow-x: auto; font: 13px/1.5 ui-monospace, monospace; }
+</style>
+</head>
+<body>
+<nav>
+  <span class="brand">sediment</span>
+  <a href="/admin" {% if active == "collections" %}class="active"{% endif %}>Collections</a>
+  <a href="/admin/access" {% if active == "access" %}class="active"{% endif %}>Access</a>
+  <a href="/admin/acl" {% if active == "acl" %}class="active"{% endif %}>ACL</a>
+  <a href="/admin/manual" {% if active == "manual" %}class="active"{% endif %}>Manual</a>
+  <a href="/admin/audit" {% if active == "audit" %}class="active"{% endif %}>Audit</a>
+  <span class="spacer"></span>
+  <span class="who">{{ principal }}</span>
+  {% if login_routes %}<a href="/admin/logout">logout</a>{% endif %}
+</nav>
+{% block content %}{% endblock %}
+</body>
+</html>

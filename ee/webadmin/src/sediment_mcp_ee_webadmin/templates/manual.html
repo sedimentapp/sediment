@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{% block title %}manual — sediment admin{% endblock %}
+{% block content %}
+<h1>Manual entries</h1>
+<p class="muted">{{ entries|length }} entries created via <code>add_knowledge</code>, newest first.
+Deleting removes the point from Qdrant permanently.</p>
+<table>
+<tr><th>When</th><th>Collection</th><th>Author</th><th>Visibility</th><th>File / title</th><th>Preview</th><th></th></tr>
+{% for e in entries %}
+{% set key = e.collection ~ ":" ~ e.point_id %}
+<tr>
+  <td title="{{ e.ts|iso }}">{{ e.ts|age }}</td>
+  <td><span class="badge">{{ e.collection }}</span></td>
+  <td><code>{{ e.author or "?" }}</code></td>
+  <td>{{ e.visibility or "" }}</td>
+  <td>{{ e.file or "" }}{% if e.title %}<div class="muted">{{ e.title }}</div>{% endif %}</td>
+  <td class="muted">{{ e.preview }}</td>
+  <td>
+    {% if confirm == key %}
+    <form method="post" action="/admin/manual/delete">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <input type="hidden" name="collection" value="{{ e.collection }}">
+      <input type="hidden" name="point_id" value="{{ e.point_id }}">
+      <button>Delete now</button> <a href="/admin/manual">cancel</a>
+    </form>
+    {% else %}
+    <a href="/admin/manual?confirm={{ key|urlencode }}">delete…</a>
+    {% endif %}
+  </td>
+</tr>
+{% else %}
+<tr><td colspan="7" class="muted">No manual entries.</td></tr>
+{% endfor %}
+</table>
+{% endblock %}

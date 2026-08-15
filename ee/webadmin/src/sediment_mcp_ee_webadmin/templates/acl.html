@@ -1,0 +1,75 @@
+{% extends "base.html" %}
+{% block title %}ACL — sediment admin{% endblock %}
+{% block content %}
+<h1>ACL config</h1>
+<p class="muted">Source: {{ source }}
+{% if editable %} · <a href="/admin/acl/edit">Edit</a> · <a href="/admin/acl/history">History</a>
+{% else %} · editing disabled (<code>MCP_ACL_DB</code> unset){% endif %}
+</p>
+{% if not enforced %}
+<div class="warn">ACL is <strong>not enforced</strong> — every authenticated principal
+can read and write every collection.</div>
+{% endif %}
+
+<h2>User groups</h2>
+<table>
+<tr><th>Group</th><th>Members</th></tr>
+{% for group, members in user_groups.items() %}
+<tr>
+  <td><code>{{ group }}</code></td>
+  <td>{% for m in members %}<a href="/admin/access?principal={{ m|lower }}"><span class="badge">{{ m }}</span></a>{% endfor %}</td>
+</tr>
+{% else %}
+<tr><td colspan="2" class="muted">No user groups.</td></tr>
+{% endfor %}
+</table>
+
+<h2>Space groups</h2>
+<table>
+<tr><th>Group</th><th>Spaces</th></tr>
+{% for group, spaces in space_groups.items() %}
+<tr>
+  <td><code>{{ group }}</code></td>
+  <td>
+    {% for s in spaces %}
+    <div><a href="/admin/access?space={{ s }}"><code>{{ s }}</code></a>
+    {% if names.get(s) %}<span class="muted">— {{ names[s] }}</span>
+    {% else %}<span class="muted">— no points anywhere</span>{% endif %}</div>
+    {% endfor %}
+  </td>
+</tr>
+{% else %}
+<tr><td colspan="2" class="muted">No space groups.</td></tr>
+{% endfor %}
+</table>
+
+<h2>Grants</h2>
+<table>
+<tr><th>#</th><th>Who</th><th>Collections</th><th>Spaces</th><th>Flags</th></tr>
+{% for g in grants %}
+<tr>
+  <td class="num">{{ loop.index }}</td>
+  <td>
+    {% for ug in g.get("user_groups", []) %}<span class="badge">group: {{ ug }}</span>{% endfor %}
+    {% for u in g.get("users", []) %}<a href="/admin/access?principal={{ u|lower }}"><span class="badge">{{ u }}</span></a>{% endfor %}
+  </td>
+  <td>{% for c in g.get("collections", []) %}<span class="badge">{{ c }}</span>{% endfor %}</td>
+  <td>
+    {% for sg in g.get("space_groups", []) %}<span class="badge">group: {{ sg }}</span>{% endfor %}
+    {% for s in g.get("spaces", []) %}
+      {% if s == "*" %}<strong>*</strong>{% else %}
+      <div><a href="/admin/access?space={{ s }}"><code>{{ s }}</code></a>
+      {% if names.get(s) %}<span class="muted">— {{ names[s] }}</span>{% endif %}</div>
+      {% endif %}
+    {% endfor %}
+  </td>
+  <td>
+    {% if g.get("write") %}<span class="badge flag">write</span>{% endif %}
+    {% if g.get("unrestricted") %}<span class="badge flag">unrestricted</span>{% endif %}
+  </td>
+</tr>
+{% else %}
+<tr><td colspan="5" class="muted">No grants.</td></tr>
+{% endfor %}
+</table>
+{% endblock %}

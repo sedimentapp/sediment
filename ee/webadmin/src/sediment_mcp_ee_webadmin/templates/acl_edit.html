@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+{% block title %}edit ACL — sediment admin{% endblock %}
+{% block content %}
+<h1>Edit ACL config</h1>
+<p class="muted">Editing: {{ source }}. Saving validates the whole document,
+stores it as a new version and applies it immediately — no restart.</p>
+{% if error %}
+<div class="warn"><strong>Rejected:</strong> {{ error }}</div>
+{% endif %}
+<form method="post" action="/admin/acl/edit">
+  <input type="hidden" name="csrf" value="{{ csrf }}">
+  <textarea class="editor" name="yaml_text" rows="24" spellcheck="false">{{ yaml_text }}</textarea>
+  <p><button>Validate &amp; save</button> <a href="/admin/acl">Cancel</a></p>
+</form>
+{% endblock %}
