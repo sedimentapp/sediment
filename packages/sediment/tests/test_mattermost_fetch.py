@@ -264,3 +264,45 @@ class TestDiscovery:
         out = capsys.readouterr().out
         assert f"mm:{DISCOVERED_ID}" in out
         assert "need an ACL grant" in out
+
+
+class TestDirectoryFollowsTheId:
+    """A channel keeps its directory when its name changes — under it or in the config."""
+
+    def test_renamed_channel_keeps_writing_to_its_directory(self, tmp_path, profile, monkeypatch):
+        profile["mattermost"]["discover"] = {"types": ["O"]}
+        install_discovery_http(
+            monkeypatch,
+            [channel(DISCOVERED_ID, "O", display_name="host-alerts")],
+            {DISCOVERED_ID: [post("p1", at(10, 0, 5), "u1", "Disk is filling up.")]},
+        )
+        mm.fetch_mattermost_posts(profile, SINCE, UNTIL)
+        assert dirs(tmp_path) == [f"host-alerts__{DISCOVERED_ID}"]
+
+        install_discovery_http(
+            monkeypatch,
+            [channel(DISCOVERED_ID, "O", display_name="infra-alerts")],
+            {DISCOVERED_ID: [post("p2", at(11, 0, 5), "u1", "Rotated the logs.")]},
+        )
+        mm.fetch_mattermost_posts(profile, SINCE, UNTIL)
+
+        assert dirs(tmp_path) == [f"host-alerts__{DISCOVERED_ID}"]
+        written = (tmp_path / "vault" / "raw" / "mattermost" / f"host-alerts__{DISCOVERED_ID}")
+        assert "Rotated the logs." in "\n".join(f.read_text() for f in written.glob("*.md"))
+
+    def test_hand_named_directory_is_adopted_once_it_carries_the_id(self, tmp_path, profile, monkeypatch):
+        """The migration path: a pinned dir renamed to <old name>__<id> must not fork."""
+        raw = tmp_path / "vault" / "raw" / "mattermost" / f"DM Some Person__{DISCOVERED_ID}"
+        raw.mkdir(parents=True)
+        (raw / "old.md").write_text("# earlier\n")
+        profile["mattermost"]["discover"] = {"types": ["O"]}
+        install_discovery_http(
+            monkeypatch,
+            [channel(DISCOVERED_ID, "O", display_name="Some Person")],
+            {DISCOVERED_ID: [post("p1", at(10, 0, 5), "u1", "A later message.")]},
+        )
+
+        mm.fetch_mattermost_posts(profile, SINCE, UNTIL)
+
+        assert dirs(tmp_path) == [f"DM Some Person__{DISCOVERED_ID}"]
+        assert sorted(p.name for p in raw.glob("*.md")) == ["old.md", f"{ROOT}.md"]

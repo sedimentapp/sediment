@@ -220,6 +220,26 @@ def _discover_channels(
     return discovered
 
 
+def _existing_dirs_by_id(raw_dir: Path) -> dict[str, Path]:
+    """channel id -> the directory already holding it, for ids encoded in a name.
+
+    A channel's visible name moves — someone renames it in Mattermost, or the
+    profile named it by hand and the config is being retired — while its id does
+    not. Without this lookup the fetcher would start a second directory under the
+    new name and re-fetch the same threads into it.
+    """
+    by_id: dict[str, Path] = {}
+    if not raw_dir.exists():
+        return by_id
+    for entry in sorted(raw_dir.iterdir()):
+        if not entry.is_dir():
+            continue
+        match = _DISCOVERED_DIR_RE.match(entry.name)
+        if match:
+            by_id.setdefault(match["id"], entry)
+    return by_id
+
+
 def fetch_mattermost_posts(profile: dict[str, Any], since_dt: datetime, until_dt: datetime):
     mm = profile["mattermost"]
     base_url = mm["url"].rstrip("/")
@@ -261,7 +281,8 @@ def fetch_mattermost_posts(profile: dict[str, Any], since_dt: datetime, until_dt
 
     discovered = _discover_channels(base_url, token, mm, pinned, exclusions, user_cache, until_ms)
     channels = pinned + discovered
-    first_seen = [c for c in discovered if not (raw_dir / c.dir_name).exists()]
+    existing_by_id = _existing_dirs_by_id(raw_dir)
+    first_seen = [c for c in discovered if c.id not in existing_by_id]
 
     total_new = 0
     total_appended = 0
@@ -269,9 +290,11 @@ def fetch_mattermost_posts(profile: dict[str, Any], since_dt: datetime, until_dt
     for channel in channels:
         ch_id = channel.id
         ch_name = channel.name
-        # Created only once something is written: discovery walks every joined
-        # channel, and most of them have nothing inside the fetch window.
-        ch_dir = raw_dir / channel.dir_name
+        # Reuse the directory that already holds this channel's id, whatever it
+        # is called; only a channel with no directory yet gets a fresh name.
+        # Created lazily: discovery walks every joined channel, and most of them
+        # have nothing inside the fetch window.
+        ch_dir = existing_by_id.get(channel.id, raw_dir / channel.dir_name)
 
         all_posts: dict[str, dict] = {}
         # Mattermost `?since=X` caps the response at ~1000 posts with no pagination,
@@ -383,7 +406,9 @@ def fetch_mattermost_posts(profile: dict[str, Any], since_dt: datetime, until_dt
 
     # Auto-added channels land in spaces nobody holds a grant for yet, and ACL
     # matches spaces exactly — without this list their content is simply invisible.
-    fetched_first_time = [c for c in first_seen if any((raw_dir / c.dir_name).glob("*.md"))]
+    fetched_first_time = [
+        c for c in first_seen if any(existing_by_id.get(c.id, raw_dir / c.dir_name).glob("*.md"))
+    ]
     if fetched_first_time:
         print(f"  New channels fetched for the first time ({len(fetched_first_time)}) — need an ACL grant:")
         for channel in fetched_first_time:
