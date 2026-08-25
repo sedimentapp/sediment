@@ -59,15 +59,25 @@ def is_already_recorded(counts: Counter[str], minute: str) -> bool:
 # Narrow patterns preferred over broad entropy matches to reduce false positives
 # (UUIDs, commit hashes, long URL params are not redacted unless they look like real secrets).
 _SECRET_PATTERNS = [
-    # `keyword: value`; left lookbehind avoids matching inside htpasswd etc.
+    # `keyword: value`. The optional `<prefix>_` run is what covers the YAML/env
+    # spelling (DOCKER_PASSWORD:, MCP_AUTH_TOKEN_alice:) — the sibling rule below
+    # only sees those when they are assigned with `=`. Prefixes must end in a
+    # separator, so the lookbehind still keeps htpasswd and friends out, and the
+    # quantifiers stay bounded (disjoint classes, but no reason to leave it open).
     re.compile(
-        r'(?i)(?<![\w-])(password|passwd|token|secret|api[_-]?key|access[_-]?key|bearer'
+        r'(?i)(?<![\w-])(?:[a-z0-9]{1,32}[_-]){0,8}'
+        r'(password|passwd|token|secret|api[_-]?key|access[_-]?key|bearer'
         r'|credential|private[_-]?key)[\s:="\']+\S+'
     ),
-    # env names with a sensitive final component (YOUTRACK_TOKEN, AWS_SECRET_ACCESS_KEY)
+    # env/YAML names with a sensitive component anywhere in them (YOUTRACK_TOKEN,
+    # AWS_SECRET_ACCESS_KEY, MCP_AUTH_TOKEN_alice). The trailing part is allowed
+    # only in front of `:` or `=`: without that anchor, `my_token_var is a name`
+    # would redact ordinary prose.
     re.compile(
-        r'(?i)(?<![\w-])(?:[a-z0-9]+_)*(?:password|passwd|token|secret|api_key'
-        r'|access_key|secret_access_key|private_key|credential|database_url)\s*=\s*\S+'
+        r'(?i)(?<![\w-])(?:[a-z0-9]{1,32}[_-]){0,8}'
+        r'(?:password|passwd|token|secret|api[_-]?key|access[_-]?key'
+        r'|secret[_-]?access[_-]?key|private[_-]?key|credential|database[_-]?url)'
+        r'(?:[_-][a-z0-9]{1,32}){0,8}\s*[:=]\s*\S+'
     ),
     # SSH/PGP private key material
     re.compile(r'ssh-(rsa|ed25519)\s+\S+'),

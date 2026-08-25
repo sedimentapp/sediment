@@ -21,6 +21,9 @@ from sediment._common import safe_path_component, sanitize
         "perm-YWxpY2U=.NDItMA==.8nD7RBYuTKflx1vNEpTEUy93rSiDjJ",
         "perm:YWxpY2U=.NDItMA==.8nD7RBYuTKflx1vNEpTEUy93rSiDjJ",
         "YOUTRACK_TOKEN: perm-YWxpY2U=.NDItMA==.8nD7RBYuTKflx1vNEpTEUy93rSiDjJ",
+        "DOCKER_PASSWORD: a8032f1012ed77d13a1614f59ec25c57fab1c49c",
+        "MCP_AUTH_TOKEN_alice: opaque-value",
+        "acme-api-key: opaque-value",
         "github_pat_abcdefghijklmnopqrstuvwxyz_0123456789",
         "-----BEGIN PRIVATE KEY-----\nsecret material\n-----END PRIVATE KEY-----",
         "-----BEGIN OPENSSH PRIVATE KEY-----\nsecret material\n-----END OPENSSH PRIVATE KEY-----",
@@ -40,6 +43,8 @@ def test_sanitize_redacts_supported_secret_formats(secret: str) -> None:
         "id 123e4567-e89b-12d3-a456-426614174000",
         "url https://example.test/path?tokenizer=enabled",
         "permanent.storage.enabled is a setting",
+        "the_token_of_trust is a phrase",
+        "SOME_TOKEN_NAME_WITHOUT_A_VALUE",
     ],
 )
 def test_sanitize_preserves_non_secrets(ordinary: str) -> None:
