@@ -7,7 +7,7 @@
 # missing here are simply skipped.
 collections:
   acme:
-    sources: [claude, telegram]
+    sources: [claude, telegram, mattermost]
 
 # A profile name matches its collection name; raw_dir is derived from
 # raw_dir (<vault_path>/raw).
@@ -24,3 +24,23 @@ profiles:
       api_hash_env: TELEGRAM_API_HASH
       session_path: ~/.telegram_session
       chats: []
+    mattermost:
+      url: https://mattermost.acme.example/
+      team: acme
+      token_env: MATTERMOST_TOKEN
+      # Channels named by hand. Their raw directory is the name below, so
+      # renaming one here orphans the files already fetched under the old name.
+      channels:
+        - { id: "<channel_id>", name: infra }
+      # Optional: pick up channels the account joined but nobody listed above.
+      # Their directory is "<name>__<channel_id>", so they need no config entry
+      # to be loaded later. Every newly fetched channel is a new ACL space that
+      # no grant covers yet — the fetch prints them for exactly that reason.
+      discover:
+        types: [O, P]           # O public, P private, G group DM, D direct
+        active_within_days: 90  # optional: ignore channels dormant that long
+      # Banned outright: never fetched, never indexed, and points already
+      # indexed for them are purged on the next load. Beats `channels` too.
+      exclude:
+        ids: []
+        names: []

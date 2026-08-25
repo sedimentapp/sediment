@@ -7,6 +7,7 @@ import re
 import threading
 import time
 import urllib.error
+from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, TypedDict
@@ -28,7 +29,7 @@ from qdrant_client.models import (
 )
 
 from sediment._common import load_profile, sanitize
-from sediment.spaces import SpaceDerivationError, SpaceResolver
+from sediment.spaces import SpaceDerivationError, SpaceExcluded, SpaceResolver
 
 CHUNK_SIZE = 800  # chars
 CHUNK_OVERLAP = 100
@@ -372,7 +373,22 @@ def load_collection(
     skipped_files = 0
     changed_files = []
     unmapped: list[SpaceDerivationError] = []
+    excluded_reasons: Counter[str] = Counter()
+    excluded_indexed: list[str] = []
     for source, rel_path, full_path in files:
+        # Ownership first: a banned file must not even be read, and its points
+        # have to go whether or not its content changed since the last run.
+        try:
+            space, space_name = spaces.derive(source, rel_path)
+        except SpaceExcluded as e:
+            excluded_reasons[e.reason] += 1
+            if rel_path in indexed:
+                excluded_indexed.append(rel_path)
+            continue
+        except SpaceDerivationError as e:
+            unmapped.append(e)
+            continue
+
         path = Path(full_path)
         original_stat = path.stat()
         raw_text = path.read_text()
@@ -392,13 +408,6 @@ def load_collection(
         if old_hash is not None and (old_hash == "" or old_hash == h):
             skipped_files += 1
             continue
-        # Derive before touching changed_files: a file we cannot map must not
-        # get its old points deleted, and must never be indexed without a space.
-        try:
-            space, space_name = spaces.derive(source, rel_path)
-        except SpaceDerivationError as e:
-            unmapped.append(e)
-            continue
         if old_hash is not None:
             changed_files.append(rel_path)
         chunks = chunk_text(text, source, rel_path)
@@ -410,6 +419,21 @@ def load_collection(
         all_chunks.extend(chunks)
 
     print(f"Skipped {skipped_files} unchanged files")
+    if excluded_reasons:
+        total_excluded = sum(excluded_reasons.values())
+        print(f"Excluded by config: {total_excluded} file(s)")
+        for reason, count in sorted(excluded_reasons.items()):
+            print(f"  {count} x {reason}")
+        # Banning a channel that was already indexed has to take its points with
+        # it, or the ban only stops new content while the old stays searchable.
+        for rel_path in excluded_indexed:
+            _qdrant_call(
+                "delete", client.delete,
+                collection,
+                points_selector=Filter(must=[FieldCondition(key="file", match=MatchValue(value=rel_path))]),
+            )
+        if excluded_indexed:
+            print(f"  Purged points of {len(excluded_indexed)} previously indexed file(s)")
     if unmapped:
         print(f"\n!!! UNMAPPED FILES (not indexed) in '{collection}': {len(unmapped)}")
         for e in unmapped:

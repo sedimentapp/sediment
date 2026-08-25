@@ -35,6 +35,7 @@ __all__ = [
     "HttpError",
     "Source",
     "SpaceDerivationError",
+    "SpaceExcluded",
     "add_dir_entry",
     "http_get",
     "is_already_recorded",
@@ -47,6 +48,21 @@ __all__ = [
 
 class SpaceDerivationError(Exception):
     """A file's space cannot be derived; the file must be reported, never silently indexed."""
+
+    def __init__(self, rel_path: str, reason: str) -> None:
+        self.rel_path = rel_path
+        self.reason = reason
+        super().__init__(f"{rel_path}: {reason}")
+
+
+class SpaceExcluded(Exception):
+    """The config bans this file's owner from the index — a decision, not a failure.
+
+    Deliberately not a SpaceDerivationError: that one means "ownership unknown"
+    and ends the run with a non-zero exit so the config gets fixed. A banned
+    channel is the config already being right, so the run stays green — but the
+    file is still skipped, and any points it left behind are purged.
+    """
 
     def __init__(self, rel_path: str, reason: str) -> None:
         self.rel_path = rel_path

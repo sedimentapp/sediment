@@ -96,3 +96,171 @@ def test_second_run_without_new_posts_adds_no_file(tmp_path, profile, monkeypatc
 
     after = sorted(p.name for p in Path(tmp_path / "vault" / "raw" / "mattermost" / "infra").glob("*.md"))
     assert after == before
+
+
+DISCOVERED_ID = "pgsr7cnjtjno7qcyt13aiwstjy"
+DM_ID = "16f8bhajtfghik9f8rwwtkpger"
+ME_ID = "ty3dhpyyypgrip5cyijgwfrf8w"
+TEAM_ID = "dy1soyciybf3xemzzn15ycmdpa"
+PEER_ID = "pux9o5g7upb85k7crwfapwkx5h"
+
+
+def channel(ch_id: str, ch_type: str, **overrides) -> dict:
+    base = {
+        "id": ch_id,
+        "type": ch_type,
+        "display_name": "",
+        "name": ch_id,
+        "team_id": TEAM_ID if ch_type in ("O", "P") else "",
+        "total_msg_count": 12,
+        "last_post_at": int(datetime(2026, 7, 20).timestamp() * 1000),
+        "delete_at": 0,
+    }
+    return {**base, **overrides}
+
+
+def install_discovery_http(monkeypatch, joined: list[dict], posts_by_channel: dict[str, list[dict]]) -> None:
+    """Serve the discovery endpoints on top of the posts/users ones."""
+    users = [
+        {"id": "u1", "first_name": "Alice", "last_name": "Doe", "username": "alice"},
+        {"id": PEER_ID, "first_name": "Bob", "last_name": "Roe", "username": "bob"},
+    ]
+
+    def fake_get(url, headers=None, timeout=None):
+        if "/users/me/channels?" in url:
+            return json.dumps(joined if "page=0" in url else [])
+        if url.endswith("/users/me"):
+            return json.dumps({"id": ME_ID})
+        if "/teams/name/" in url:
+            return json.dumps({"id": TEAM_ID})
+        if "/users?" in url:
+            return json.dumps(users if "page=0" in url else [])
+        if "/posts?" in url:
+            ch_id = url.split("/channels/")[1].split("/posts")[0]
+            if "page=0" not in url:
+                return json.dumps({"posts": {}})
+            return json.dumps({"posts": {p["id"]: p for p in posts_by_channel.get(ch_id, [])}})
+        raise AssertionError(f"unexpected URL: {url}")
+
+    monkeypatch.setattr(mm, "http_get", fake_get)
+    monkeypatch.setenv("MM_TEST_TOKEN", "token")
+
+
+def dirs(tmp_path) -> list[str]:
+    root = tmp_path / "vault" / "raw" / "mattermost"
+    return sorted(p.name for p in root.iterdir()) if root.exists() else []
+
+
+class TestDiscovery:
+    def test_public_channel_lands_in_an_id_suffixed_dir(self, tmp_path, profile, monkeypatch):
+        profile["mattermost"]["discover"] = {"types": ["O"]}
+        install_discovery_http(
+            monkeypatch,
+            [channel(DISCOVERED_ID, "O", display_name="host-alerts")],
+            {DISCOVERED_ID: [post("p1", at(10, 0, 5), "u1", "Disk is filling up.")]},
+        )
+
+        mm.fetch_mattermost_posts(profile, SINCE, UNTIL)
+
+        assert dirs(tmp_path) == [f"host-alerts__{DISCOVERED_ID}"]
+
+    def test_direct_message_is_named_after_the_counterpart(self, tmp_path, profile, monkeypatch):
+        profile["mattermost"]["discover"] = {"types": ["D"]}
+        install_discovery_http(
+            monkeypatch,
+            [channel(DM_ID, "D", name=f"{PEER_ID}__{ME_ID}")],
+            {DM_ID: [post("p1", at(10, 0, 5), PEER_ID, "Ping.")]},
+        )
+
+        mm.fetch_mattermost_posts(profile, SINCE, UNTIL)
+
+        assert dirs(tmp_path) == [f"Bob Roe__{DM_ID}"]
+
+    def test_pinned_channel_is_not_fetched_twice(self, tmp_path, profile, monkeypatch):
+        profile["mattermost"]["discover"] = {"types": ["O"]}
+        install_discovery_http(
+            monkeypatch,
+            [channel(CHANNEL_ID, "O", display_name="infra")],
+            {CHANNEL_ID: [post("p1", at(10, 0, 5), "u1", "The gateway is dropping tunnels again.")]},
+        )
+
+        mm.fetch_mattermost_posts(profile, SINCE, UNTIL)
+
+        assert dirs(tmp_path) == ["infra"]
+
+    def test_excluded_id_is_never_fetched(self, tmp_path, profile, monkeypatch):
+        profile["mattermost"]["discover"] = {"types": ["O"]}
+        profile["mattermost"]["exclude"] = {"ids": [DISCOVERED_ID]}
+        install_discovery_http(
+            monkeypatch,
+            [channel(DISCOVERED_ID, "O", display_name="host-alerts")],
+            {DISCOVERED_ID: [post("p1", at(10, 0, 5), "u1", "Disk is filling up.")]},
+        )
+
+        mm.fetch_mattermost_posts(profile, SINCE, UNTIL)
+
+        assert dirs(tmp_path) == []
+
+    def test_exclude_by_name_also_bans_a_pinned_channel(self, tmp_path, profile, monkeypatch):
+        """The ban is absolute: being listed by hand does not survive it."""
+        profile["mattermost"]["exclude"] = {"names": ["infra"]}
+        install_http(monkeypatch, [post("p1", at(10, 0, 5), "u1", "The gateway is dropping tunnels.")])
+
+        with pytest.raises(ValueError, match="No channels configured"):
+            mm.fetch_mattermost_posts(profile, SINCE, UNTIL)
+
+    def test_channel_without_recent_traffic_is_skipped(self, tmp_path, profile, monkeypatch):
+        profile["mattermost"]["discover"] = {"types": ["O"], "active_within_days": 30}
+        stale = int(datetime(2026, 1, 1).timestamp() * 1000)
+        install_discovery_http(
+            monkeypatch,
+            [channel(DISCOVERED_ID, "O", display_name="host-alerts", last_post_at=stale)],
+            {DISCOVERED_ID: [post("p1", at(10, 0, 5), "u1", "Disk is filling up.")]},
+        )
+
+        mm.fetch_mattermost_posts(profile, SINCE, UNTIL)
+
+        assert dirs(tmp_path) == []
+
+    def test_channel_of_another_team_is_skipped(self, tmp_path, profile, monkeypatch):
+        profile["mattermost"]["discover"] = {"types": ["O"]}
+        install_discovery_http(
+            monkeypatch,
+            [channel(DISCOVERED_ID, "O", display_name="host-alerts", team_id="othersteamidxxxxxxxxxxxxxx")],
+            {DISCOVERED_ID: [post("p1", at(10, 0, 5), "u1", "Disk is filling up.")]},
+        )
+
+        mm.fetch_mattermost_posts(profile, SINCE, UNTIL)
+
+        assert dirs(tmp_path) == []
+
+    def test_channel_with_nothing_in_the_window_creates_no_directory(self, tmp_path, profile, monkeypatch):
+        profile["mattermost"]["discover"] = {"types": ["O"]}
+        install_discovery_http(
+            monkeypatch, [channel(DISCOVERED_ID, "O", display_name="host-alerts")], {}
+        )
+
+        mm.fetch_mattermost_posts(profile, SINCE, UNTIL)
+
+        assert dirs(tmp_path) == []
+
+    def test_unknown_channel_type_fails_loudly(self, tmp_path, profile, monkeypatch):
+        profile["mattermost"]["discover"] = {"types": ["O", "X"]}
+        install_discovery_http(monkeypatch, [], {})
+
+        with pytest.raises(ValueError, match="Unknown mattermost channel types: X"):
+            mm.fetch_mattermost_posts(profile, SINCE, UNTIL)
+
+    def test_new_channels_are_reported_with_their_space(self, tmp_path, profile, monkeypatch, capsys):
+        profile["mattermost"]["discover"] = {"types": ["O"]}
+        install_discovery_http(
+            monkeypatch,
+            [channel(DISCOVERED_ID, "O", display_name="host-alerts")],
+            {DISCOVERED_ID: [post("p1", at(10, 0, 5), "u1", "Disk is filling up.")]},
+        )
+
+        mm.fetch_mattermost_posts(profile, SINCE, UNTIL)
+
+        out = capsys.readouterr().out
+        assert f"mm:{DISCOVERED_ID}" in out
+        assert "need an ACL grant" in out

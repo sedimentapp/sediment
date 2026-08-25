@@ -257,3 +257,54 @@ def test_parallel_workers_match_sequential(tmp_path, spaces):
     sequential = run(1)
     assert len(sequential) == ql.BATCH_SIZE + 6
     assert run(4) == sequential
+
+
+EXCLUDING_PROFILE = {
+    "mattermost": {
+        "channels": [{"id": "chanidinfra", "name": "infra"}],
+        "exclude": {"names": ["infra"]},
+    }
+}
+
+
+def test_excluded_channel_is_skipped_without_failing_the_run(tmp_path, client):
+    write(tmp_path, "mattermost/infra/root1.md", f"# t\n\n{LONG}")
+
+    unmapped = load(client, tmp_path, SpaceResolver.from_profile(EXCLUDING_PROFILE))
+
+    # A ban is a decision, not a config error: unmapped stays empty, so the run
+    # still exits zero, and nothing of the channel reaches the index.
+    assert unmapped == []
+    assert client.count("acme", exact=True).count == 0
+
+
+def test_banning_a_channel_purges_what_it_already_indexed(tmp_path, client, spaces):
+    write(tmp_path, "mattermost/infra/root1.md", f"# t\n\n{LONG}")
+    load(client, tmp_path, spaces)
+    assert len(points_by_file(client, "mattermost/infra/root1.md")) == 1
+
+    load(client, tmp_path, SpaceResolver.from_profile(EXCLUDING_PROFILE))
+
+    assert points_by_file(client, "mattermost/infra/root1.md") == []
+
+
+def test_lifting_the_ban_reindexes_the_channel(tmp_path, client, spaces):
+    write(tmp_path, "mattermost/infra/root1.md", f"# t\n\n{LONG}")
+    load(client, tmp_path, spaces)
+    load(client, tmp_path, SpaceResolver.from_profile(EXCLUDING_PROFILE))
+
+    load(client, tmp_path, spaces)
+
+    assert len(points_by_file(client, "mattermost/infra/root1.md")) == 1
+
+
+def test_discovered_directory_loads_without_being_in_the_config(tmp_path, client, spaces):
+    rel = "mattermost/host-alerts__pgsr7cnjtjno7qcyt13aiwstjy/root1.md"
+    write(tmp_path, rel, f"# t\n\n{LONG}")
+
+    unmapped = load(client, tmp_path, spaces)
+
+    assert unmapped == []
+    (point,) = points_by_file(client, rel)
+    assert point["space"] == "mm:pgsr7cnjtjno7qcyt13aiwstjy"
+    assert point["space_name"] == "host-alerts"

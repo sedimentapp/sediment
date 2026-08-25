@@ -27,7 +27,7 @@ from sediment.load import (
     qdrant_client,
     select_collections,
 )
-from sediment.spaces import SpaceDerivationError, SpaceResolver
+from sediment.spaces import SpaceDerivationError, SpaceExcluded, SpaceResolver
 
 SET_PAYLOAD_BATCH = 500
 
@@ -84,7 +84,7 @@ def backfill_collection(
     manual_ids: list = []
     manual_examples: list[str] = []
     unmapped: dict[str, str] = {}  # rel_path -> reason (unique per file)
-    derived_cache: dict[str, tuple[str, str] | SpaceDerivationError] = {}
+    derived_cache: dict[str, tuple[str, str] | SpaceDerivationError | SpaceExcluded] = {}
     total = 0
 
     for point_id, payload in scroll_all(client, collection):
@@ -104,10 +104,10 @@ def backfill_collection(
         if cached is None:
             try:
                 cached = spaces.derive(source, file)
-            except SpaceDerivationError as e:
+            except (SpaceDerivationError, SpaceExcluded) as e:
                 cached = e
             derived_cache[file] = cached
-        if isinstance(cached, SpaceDerivationError):
+        if isinstance(cached, (SpaceDerivationError, SpaceExcluded)):
             unmapped[file] = cached.reason
             continue
         ids_by_space[cached].append(point_id)

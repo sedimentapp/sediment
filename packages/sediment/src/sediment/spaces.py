@@ -15,7 +15,7 @@ invisible, and the content_hash increment would never revisit it.
 from typing import Any
 
 from sediment.registry import available_sources
-from sediment.sources import SpaceDerivationError
+from sediment.sources import SpaceDerivationError, SpaceExcluded
 
 
 class SpaceResolver:
@@ -36,8 +36,9 @@ class SpaceResolver:
         """(space, space_name) for a raw file path relative to raw_dir.
 
         Raises SpaceDerivationError when this particular file cannot be mapped
-        (skip + report), and RuntimeError when the run is misconfigured (a
-        source whose rule needs profile config that is absent).
+        (skip + report), SpaceExcluded when the config bans its owner from the
+        index (skip, no failure), and RuntimeError when the run is misconfigured
+        (a source whose rule needs profile config that is absent).
         """
         plugin = available_sources().get(source)
         if plugin is None:
@@ -49,4 +50,4 @@ class SpaceResolver:
         return plugin.derive_space(rel_path, self._contexts[source])
 
 
-__all__ = ["SpaceDerivationError", "SpaceResolver"]
+__all__ = ["SpaceDerivationError", "SpaceExcluded", "SpaceResolver"]

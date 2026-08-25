@@ -87,6 +87,10 @@ _SECRET_PATTERNS = [
     re.compile(r'\bAIza[A-Za-z0-9_-]{35}\b'),                        # Google API key
     re.compile(r'\bxox[baprs]-[A-Za-z0-9-]{10,}'),                  # Slack
     re.compile(r'\bAKIA[0-9A-Z]{16}\b'),                            # AWS access key
+    # YouTrack permanent token: perm-<b64>.<b64>.<hash> (perm: in the older form).
+    # Bounded quantifiers, and the three-part shape keeps ordinary words starting
+    # with "perm" out of it.
+    re.compile(r'\bperm[-:][A-Za-z0-9+/=_-]{2,64}\.[A-Za-z0-9+/=_-]{2,64}\.[A-Za-z0-9+/=_-]{20,128}'),
     re.compile(r'\beyJ[A-Za-z0-9_\-]+\.eyJ[A-Za-z0-9_\-]+\.[A-Za-z0-9_\-]+'),  # JWT
     # Known names not covered by the generic sensitive-suffix rule.
     re.compile(r'(?i)(AWS_SECRET|SOPS_AGE_KEY)=\S+'),

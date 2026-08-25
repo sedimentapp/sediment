@@ -1,6 +1,6 @@
 import pytest
 
-from sediment.spaces import SpaceDerivationError, SpaceResolver
+from sediment.spaces import SpaceDerivationError, SpaceExcluded, SpaceResolver
 
 MM_PROFILE = {
     "mattermost": {
@@ -70,6 +70,56 @@ class TestMattermost:
             }
         }
         with pytest.raises(RuntimeError, match="Ambiguous"):
+            SpaceResolver.from_profile(profile)
+
+    def test_discovered_dir_resolves_without_config(self):
+        """Auto-discovered directories carry the id, so the fetch host's config isn't needed."""
+        space, name = spaces(MM_PROFILE).derive(
+            "mattermost", "mattermost/host-alerts__pgsr7cnjtjno7qcyt13aiwstjy/rootid.md"
+        )
+        assert space == "mm:pgsr7cnjtjno7qcyt13aiwstjy"
+        assert name == "host-alerts"
+
+    def test_discovered_dir_resolves_with_no_mattermost_section(self):
+        space, _ = spaces({}).derive(
+            "mattermost", "mattermost/host-alerts__pgsr7cnjtjno7qcyt13aiwstjy/rootid.md"
+        )
+        assert space == "mm:pgsr7cnjtjno7qcyt13aiwstjy"
+
+    def test_pinned_entry_wins_over_id_suffix(self):
+        """A pinned name that happens to look like a discovered dir keeps its configured id."""
+        profile = {
+            "mattermost": {
+                "channels": [
+                    {"id": "pinnedidxxxxxxxxxxxxxxxxxx", "name": "weird__pgsr7cnjtjno7qcyt13aiwstjy"}
+                ]
+            }
+        }
+        space, _ = spaces(profile).derive(
+            "mattermost", "mattermost/weird__pgsr7cnjtjno7qcyt13aiwstjy/r.md"
+        )
+        assert space == "mm:pinnedidxxxxxxxxxxxxxxxxxx"
+
+    def test_excluded_id_is_banned_not_unmapped(self):
+        profile = {
+            "mattermost": {
+                "channels": [{"id": "3tgwj6wrx3yu5rrm9mkkwth93h", "name": "infra"}],
+                "exclude": {"ids": ["3tgwj6wrx3yu5rrm9mkkwth93h"]},
+            }
+        }
+        with pytest.raises(SpaceExcluded, match="banned by mattermost.exclude"):
+            spaces(profile).derive("mattermost", "mattermost/infra/rootid.md")
+
+    def test_excluded_name_bans_a_discovered_dir(self):
+        profile = {"mattermost": {"channels": [], "exclude": {"names": ["host-alerts"]}}}
+        with pytest.raises(SpaceExcluded):
+            spaces(profile).derive(
+                "mattermost", "mattermost/host-alerts__pgsr7cnjtjno7qcyt13aiwstjy/r.md"
+            )
+
+    def test_unknown_exclude_key_fails(self):
+        profile = {"mattermost": {"channels": [], "exclude": {"idz": ["x"]}}}
+        with pytest.raises(ValueError, match="Unknown keys in mattermost.exclude"):
             SpaceResolver.from_profile(profile)
 
     def test_duplicate_identical_entries_allowed(self):

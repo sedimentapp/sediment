@@ -3,9 +3,12 @@
 import glob
 import json
 import os
+import re
 import urllib.error
 import urllib.parse
+from collections import Counter
 from collections.abc import Mapping
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -21,7 +24,200 @@ from sediment._common import (
     safe_path_component,
     sanitize,
 )
-from sediment.sources import FetchWindow, Source, SpaceDerivationError, add_dir_entry
+from sediment.sources import (
+    FetchWindow,
+    Source,
+    SpaceDerivationError,
+    SpaceExcluded,
+    add_dir_entry,
+)
+
+# Mattermost channel types, as the `type` field spells them.
+CHANNEL_TYPES = {"O": "public", "P": "private", "G": "group", "D": "direct"}
+
+_MAX_DISCOVERED_NAME_CHARS = 120
+_MM_ID_RE = re.compile(r"[a-z0-9]{26}")
+# Discovered channels carry their id in the directory name, so a raw file stays
+# self-describing: `derive_space` reads ownership straight off the path instead
+# of needing the channel to be listed in the profile. Pinned channels keep the
+# bare-name layout they were fetched with.
+_DISCOVERED_DIR_RE = re.compile(rf"^(?P<name>.+)__(?P<id>{_MM_ID_RE.pattern})$")
+
+
+@dataclass(frozen=True)
+class Channel:
+    """One channel to fetch: stable id, display name, and the directory it owns."""
+
+    id: str
+    name: str
+    dir_name: str
+
+
+@dataclass(frozen=True)
+class Exclusions:
+    """Channels the config bans outright — from fetching and from indexing alike."""
+
+    ids: frozenset[str] = frozenset()
+    names: frozenset[str] = frozenset()
+
+    def blocks(self, channel_id: str, channel_name: str) -> bool:
+        return channel_id in self.ids or channel_name in self.names
+
+
+@dataclass(frozen=True)
+class SpaceContext:
+    """What `derive_space` needs: the pinned dir->channel map plus the ban list."""
+
+    by_dir: dict[str, tuple[str, str]] = field(default_factory=dict)
+    exclusions: Exclusions = Exclusions()
+
+
+def _api_get(base_url: str, token: str, path: str, timeout: int = 30) -> Any:
+    return json.loads(
+        http_get(f"{base_url}{path}", headers={"Authorization": f"Bearer {token}"}, timeout=timeout)
+    )
+
+
+def _exclusions(mm_cfg: Mapping[str, Any]) -> Exclusions:
+    exclude = mm_cfg.get("exclude") or {}
+    unknown = set(exclude) - {"ids", "names"}
+    if unknown:
+        raise ValueError(f"Unknown keys in mattermost.exclude: {', '.join(sorted(unknown))}")
+    return Exclusions(
+        ids=frozenset(str(i) for i in exclude.get("ids", [])),
+        names=frozenset(str(n) for n in exclude.get("names", [])),
+    )
+
+
+def _pinned_channels(mm_cfg: Mapping[str, Any], exclusions: Exclusions) -> list[Channel]:
+    """Channels listed by hand in the profile, minus the ones `exclude` bans."""
+    pinned = []
+    for ch in mm_cfg.get("channels", []):
+        ch_id = str(ch["id"] if isinstance(ch, dict) else ch)
+        ch_name = str(ch.get("name", ch_id) if isinstance(ch, dict) else ch_id)
+        if exclusions.blocks(ch_id, ch_name):
+            print(f"  Excluded (configured but banned): {ch_name}")
+            continue
+        pinned.append(
+            Channel(ch_id, ch_name, safe_path_component(ch_name, "Mattermost channel name"))
+        )
+    return pinned
+
+
+def _discovered_name(ch: Mapping[str, Any], user_cache: Mapping[str, str], me_id: str) -> str:
+    """A human name for a channel the profile never named.
+
+    Direct messages have no display_name at all — their `name` is the two member
+    ids joined by `__`, so the counterpart's name has to come from the user cache.
+    """
+    display = str(ch.get("display_name") or "").strip()
+    if display:
+        return display
+    raw_name = str(ch.get("name", ""))
+    if ch.get("type") == "D":
+        members = raw_name.split("__")
+        # A self-DM has both halves equal, so "the other one" is just the other half.
+        other = next((m for m in members if m != me_id), members[-1] if members else "")
+        return user_cache.get(other, other) or raw_name
+    return raw_name
+
+
+def _discover_channels(
+    base_url: str,
+    token: str,
+    mm_cfg: Mapping[str, Any],
+    pinned: list[Channel],
+    exclusions: Exclusions,
+    user_cache: Mapping[str, str],
+    until_ms: int,
+) -> list[Channel]:
+    """Channels the account is a member of that the profile does not list.
+
+    Returns [] unless the profile opts in with a `discover` section; the opt-in
+    names the channel types to pick up, so "public channels only" and "every
+    conversation with recent traffic" are the same mechanism at different settings.
+    """
+    discover = mm_cfg.get("discover")
+    if not discover:
+        return []
+    unknown = set(discover) - {"types", "active_within_days"}
+    if unknown:
+        raise ValueError(f"Unknown keys in mattermost.discover: {', '.join(sorted(unknown))}")
+
+    types = discover.get("types")
+    if not isinstance(types, list) or not types:
+        raise ValueError(
+            "mattermost.discover.types must be a non-empty list of channel types "
+            f"({', '.join(f'{k} = {v}' for k, v in CHANNEL_TYPES.items())})"
+        )
+    unknown_types = set(types) - set(CHANNEL_TYPES)
+    if unknown_types:
+        raise ValueError(f"Unknown mattermost channel types: {', '.join(sorted(unknown_types))}")
+
+    active_days = discover.get("active_within_days")
+    # Anchored to the fetch window's end, not to wall clock: a backfill run asks
+    # "which channels were alive back then", and repeat runs stay deterministic.
+    cutoff_ms = until_ms - int(active_days) * 86_400_000 if active_days else None
+
+    team_id = ""
+    if {"O", "P"} & set(types):
+        team_name = mm_cfg.get("team", "")
+        if not team_name:
+            raise ValueError("mattermost.discover of public/private channels requires mattermost.team")
+        team_id = _api_get(base_url, token, f"/api/v4/teams/name/{urllib.parse.quote(team_name)}")["id"]
+
+    me_id = _api_get(base_url, token, "/api/v4/users/me")["id"] if "D" in types else ""
+
+    candidates: list[dict] = []
+    page = 0
+    per_page = 200
+    while True:
+        params = urllib.parse.urlencode({"page": page, "per_page": per_page})
+        batch = _api_get(base_url, token, f"/api/v4/users/me/channels?{params}")
+        candidates.extend(batch)
+        if len(batch) < per_page:
+            break
+        page += 1
+
+    pinned_ids = {c.id for c in pinned}
+    taken_dirs = {c.dir_name for c in pinned}
+    discovered: list[Channel] = []
+    per_type: Counter[str] = Counter()
+    skipped_excluded = 0
+    for ch in candidates:
+        ch_id = ch["id"]
+        if ch_id in pinned_ids or ch.get("delete_at"):
+            continue
+        ch_type = str(ch.get("type", ""))
+        if ch_type not in types:
+            continue
+        if ch_type in ("O", "P") and ch.get("team_id") != team_id:
+            continue
+        if not ch.get("total_msg_count"):
+            continue
+        if cutoff_ms is not None and int(ch.get("last_post_at") or 0) < cutoff_ms:
+            continue
+        ch_name = _discovered_name(ch, user_cache, me_id)
+        if exclusions.blocks(ch_id, ch_name):
+            skipped_excluded += 1
+            continue
+        stem = safe_path_component(
+            ch_name.replace("/", "-")[:_MAX_DISCOVERED_NAME_CHARS].strip() or ch_id,
+            "Mattermost channel name",
+        )
+        dir_name = f"{stem}__{ch_id}"
+        if dir_name in taken_dirs:  # same channel twice in one listing — Mattermost shouldn't, but
+            continue
+        taken_dirs.add(dir_name)
+        per_type[ch_type] += 1
+        discovered.append(Channel(ch_id, ch_name, dir_name))
+
+    by_type = ", ".join(f"{CHANNEL_TYPES[t]} {per_type[t]}" for t in types if per_type[t])
+    print(
+        f"  Discovery: {len(candidates)} joined, {len(pinned)} pinned, "
+        f"{len(discovered)} auto ({by_type or 'none'}), {skipped_excluded} excluded"
+    )
+    return discovered
 
 
 def fetch_mattermost_posts(profile: dict[str, Any], since_dt: datetime, until_dt: datetime):
@@ -35,12 +231,14 @@ def fetch_mattermost_posts(profile: dict[str, Any], since_dt: datetime, until_dt
     raw_dir = Path(profile["vault_path"]).expanduser() / "raw" / "mattermost"
     raw_dir.mkdir(parents=True, exist_ok=True)
 
-    channels = mm.get("channels", [])
-    if not channels:
-        raise ValueError("No channels configured in _profile.yaml")
+    exclusions = _exclusions(mm)
+    pinned = _pinned_channels(mm, exclusions)
+    if not pinned and not mm.get("discover"):
+        raise ValueError("No channels configured in _profile.yaml and discovery is off")
 
     team_name = mm.get("team", "")
     cutoff_ms = int(since_dt.timestamp() * 1000)
+    until_ms = int(until_dt.timestamp() * 1000)
 
     # Preload users — paged: a bare ?per_page=200 silently caps at the first
     # page, leaving posts of everyone else with raw user ids instead of names
@@ -61,20 +259,21 @@ def fetch_mattermost_posts(profile: dict[str, Any], since_dt: datetime, until_dt
         users_page += 1
     print(f"  Loaded {len(user_cache)} users")
 
+    discovered = _discover_channels(base_url, token, mm, pinned, exclusions, user_cache, until_ms)
+    channels = pinned + discovered
+    first_seen = [c for c in discovered if not (raw_dir / c.dir_name).exists()]
+
     total_new = 0
     total_appended = 0
 
-    for ch in channels:
-        ch_id = ch["id"] if isinstance(ch, dict) else ch
-        ch_name = safe_path_component(
-            ch.get("name", ch_id) if isinstance(ch, dict) else ch_id,
-            "Mattermost channel name",
-        )
-        ch_dir = raw_dir / ch_name
-        ch_dir.mkdir(exist_ok=True)
+    for channel in channels:
+        ch_id = channel.id
+        ch_name = channel.name
+        # Created only once something is written: discovery walks every joined
+        # channel, and most of them have nothing inside the fetch window.
+        ch_dir = raw_dir / channel.dir_name
 
         all_posts: dict[str, dict] = {}
-        until_ms = int(until_dt.timestamp() * 1000)
         # Mattermost `?since=X` caps the response at ~1000 posts with no pagination,
         # so deep backfills silently lose history. Page-walk newest-first instead,
         # stopping once the batch is fully older than the cutoff.
@@ -172,6 +371,7 @@ def fetch_mattermost_posts(profile: dict[str, Any], since_dt: datetime, until_dt
                 lines.append(f"**{user_name}** [{ts_str}]: {post['message']}")
                 lines.append("")
 
+            ch_dir.mkdir(parents=True, exist_ok=True)
             raw_file.write_text(sanitize("\n".join(lines)))
 
         if ch_new or ch_appended:
@@ -181,16 +381,25 @@ def fetch_mattermost_posts(profile: dict[str, Any], since_dt: datetime, until_dt
 
     print(f"  Total threads: {total_new} new, {total_appended} updated")
 
+    # Auto-added channels land in spaces nobody holds a grant for yet, and ACL
+    # matches spaces exactly — without this list their content is simply invisible.
+    fetched_first_time = [c for c in first_seen if any((raw_dir / c.dir_name).glob("*.md"))]
+    if fetched_first_time:
+        print(f"  New channels fetched for the first time ({len(fetched_first_time)}) — need an ACL grant:")
+        for channel in fetched_first_time:
+            print(f"    {make_space('mattermost', channel.id)}  {channel.name}")
+
 
 def _fetch(profile: dict[str, Any], window: FetchWindow, options: Mapping[str, Any]) -> None:
     fetch_mattermost_posts(profile, since_dt=window.since_dt, until_dt=window.until_dt)
 
 
-def _space_context(profile: dict[str, Any]) -> dict[str, tuple[str, str]] | None:
-    """dir-name -> (channel_id, channel_name); None when the profile has no mattermost section.
+def _space_context(profile: dict[str, Any]) -> SpaceContext | None:
+    """Pinned dir-name -> (channel_id, channel_name) plus exclusions; None without the section.
 
-    Directories carry the human channel name, so the stable id has to come from
-    the same config the fetcher wrote them with.
+    Pinned directories carry only the human channel name, so their stable id has
+    to come from the same config the fetcher wrote them with. Auto-discovered
+    ones need no config at all — see `_derive_space`.
     """
     mm_cfg = profile.get("mattermost")
     if mm_cfg is None:
@@ -202,26 +411,39 @@ def _space_context(profile: dict[str, Any]) -> dict[str, tuple[str, str]] | None
         ch_name = ch.get("name", ch_id) if isinstance(ch, dict) else ch_id
         dir_key = safe_path_component(ch_name, "Mattermost channel name")
         add_dir_entry(by_dir, "mattermost", dir_key, (ch_id, ch_name))
-    return by_dir
+    return SpaceContext(by_dir=by_dir, exclusions=_exclusions(mm_cfg))
 
 
-def _derive_space(rel_path: str, context: dict[str, tuple[str, str]] | None) -> tuple[str, str]:
-    """mattermost/<channel_name>/<root_id>[.stamp].md — ownership is the directory."""
-    if context is None:
-        raise RuntimeError(
-            "Loading mattermost requires --config-dir with a profile containing "
-            "the mattermost section (name->id map for space derivation)"
-        )
+def _derive_space(rel_path: str, context: SpaceContext | None) -> tuple[str, str]:
+    """mattermost/<channel_name>[__<channel_id>]/<root_id>[.stamp].md — the directory owns the file.
+
+    Pinned channels resolve through the profile; discovered ones carry the id in
+    the directory name, so their files survive a config the fetch host never had.
+    """
     parts = rel_path.split("/")
     if len(parts) < 3:
         raise SpaceDerivationError(rel_path, "expected mattermost/<dir>/<file>.md layout")
     dir_name = parts[1]
-    entry = context.get(dir_name)
-    if entry is None:
+
+    entry = context.by_dir.get(dir_name) if context is not None else None
+    if entry is not None:
+        channel_id, channel_name = entry
+    elif match := _DISCOVERED_DIR_RE.match(dir_name):
+        channel_id, channel_name = match["id"], match["name"]
+    elif context is None:
+        raise RuntimeError(
+            "Loading mattermost requires --config-dir with a profile containing "
+            "the mattermost section (name->id map for space derivation)"
+        )
+    else:
         raise SpaceDerivationError(
             rel_path, f"mattermost directory {dir_name!r} not in config (renamed or removed channel?)"
         )
-    channel_id, channel_name = entry
+
+    if context is not None and context.exclusions.blocks(channel_id, channel_name):
+        raise SpaceExcluded(
+            rel_path, f"channel {channel_name!r} is banned by mattermost.exclude — not indexed"
+        )
     return make_space("mattermost", channel_id), channel_name
 
 

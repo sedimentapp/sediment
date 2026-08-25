@@ -50,6 +50,10 @@ The point is context isolation: if you run several unrelated tracks (say, your o
 
 Built in are the sources that run unattended in a container: **YouTrack** and **Mattermost**, which need nothing but a URL and a token.
 
+Mattermost channels can be listed by hand (`channels:`) or picked up automatically: `discover: {types: [O, P], active_within_days: 90}` fetches every channel the account has joined of those types — public, private, group DMs, direct — that is not dormant. Auto-added channels get a `<name>__<channel_id>` raw directory, so their `space` is readable straight off the path and they never need a config entry. `exclude: {ids: [], names: []}` bans a channel outright: it is never fetched, never indexed, and whatever it already put in Qdrant is purged on the next load — a ban overrides `channels` too.
+
+A channel fetched for the first time lands in a `space` no ACL grant covers, so its content is invisible until someone grants it; the fetch prints those spaces at the end of the run.
+
 Anything bound to one machine — an interactive login, a session file, transcripts that exist only on the laptop that wrote them — ships as a separate distribution and registers a `Source` under the `sediment.sources` entry-point group:
 
 ```toml
