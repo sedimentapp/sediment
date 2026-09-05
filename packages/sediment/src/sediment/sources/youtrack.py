@@ -223,9 +223,20 @@ def _derive_space(rel_path: str, context: None) -> tuple[str, str]:
     return make_space("youtrack", project), project
 
 
+def _doc_kind(rel_path: str) -> str | None:
+    """Articles are numbered "A-<n>" within their project; issues are plain numbers."""
+    stem = rel_path.split("/")[-1].removesuffix(".md")
+    _, _, rest = stem.partition("-")
+    if rest.startswith("A-"):
+        return "article"
+    return "issue" if rest.isdigit() else None
+
+
 SOURCE = Source(
     name="youtrack",
     fetch=_fetch,
     derive_space=_derive_space,
     add_arguments=_add_arguments,
+    space_kind="project",
+    doc_kind=_doc_kind,
 )

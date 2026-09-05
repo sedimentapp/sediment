@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 import sediment.sources.mattermost as mm
+from sediment.sources import read_space_kinds
 
 SINCE = datetime(2026, 7, 1)
 UNTIL = datetime(2026, 8, 1)
@@ -148,7 +149,7 @@ def install_discovery_http(monkeypatch, joined: list[dict], posts_by_channel: di
 
 def dirs(tmp_path) -> list[str]:
     root = tmp_path / "vault" / "raw" / "mattermost"
-    return sorted(p.name for p in root.iterdir()) if root.exists() else []
+    return sorted(p.name for p in root.iterdir() if p.is_dir()) if root.exists() else []
 
 
 class TestDiscovery:
@@ -306,3 +307,59 @@ class TestDirectoryFollowsTheId:
 
         assert dirs(tmp_path) == [f"DM Some Person__{DISCOVERED_ID}"]
         assert sorted(p.name for p in raw.glob("*.md")) == ["old.md", f"{ROOT}.md"]
+
+
+class TestSpaceKindSidecar:
+    def test_discovery_records_the_channel_type(self, tmp_path, profile, monkeypatch):
+        profile["mattermost"]["discover"] = {"types": ["O", "D"]}
+        install_discovery_http(
+            monkeypatch,
+            [
+                channel(DISCOVERED_ID, "O", display_name="host-alerts"),
+                channel(DM_ID, "D", name=f"{PEER_ID}__{ME_ID}"),
+            ],
+            {DISCOVERED_ID: [post("p1", at(10, 0, 5), "u1", "Disk is filling up.")]},
+        )
+
+        mm.fetch_mattermost_posts(profile, SINCE, UNTIL)
+
+        assert read_space_kinds(tmp_path / "vault" / "raw" / "mattermost") == {
+            f"mm:{DISCOVERED_ID}": "public",
+            f"mm:{DM_ID}": "dm",
+        }
+
+    def test_pinned_channel_gets_a_kind_although_discovery_skips_it(self, tmp_path, profile, monkeypatch):
+        """Its type is only ever in the listing, and the listing is walked once."""
+        profile["mattermost"]["discover"] = {"types": ["O"]}
+        install_discovery_http(
+            monkeypatch,
+            [channel(CHANNEL_ID, "P", display_name="infra")],
+            {CHANNEL_ID: [post("p1", at(10, 0, 5), "u1", "Disk is filling up.")]},
+        )
+
+        mm.fetch_mattermost_posts(profile, SINCE, UNTIL)
+
+        assert read_space_kinds(tmp_path / "vault" / "raw" / "mattermost") == {f"mm:{CHANNEL_ID}": "private"}
+
+    def test_a_narrower_second_run_keeps_the_kinds_of_the_first(self, tmp_path, profile, monkeypatch):
+        """A fetch window only lists what was active in it; the rest must not lose its kind."""
+        profile["mattermost"]["discover"] = {"types": ["O", "D"]}
+        install_discovery_http(
+            monkeypatch,
+            [
+                channel(DISCOVERED_ID, "O", display_name="host-alerts"),
+                channel(DM_ID, "D", name=f"{PEER_ID}__{ME_ID}"),
+            ],
+            {DISCOVERED_ID: [post("p1", at(10, 0, 5), "u1", "Disk is filling up.")]},
+        )
+        mm.fetch_mattermost_posts(profile, SINCE, UNTIL)
+
+        install_discovery_http(
+            monkeypatch,
+            [channel(DM_ID, "D", name=f"{PEER_ID}__{ME_ID}")],
+            {},
+        )
+        mm.fetch_mattermost_posts(profile, SINCE, UNTIL)
+
+        kinds = read_space_kinds(tmp_path / "vault" / "raw" / "mattermost")
+        assert kinds[f"mm:{DISCOVERED_ID}"] == "public"

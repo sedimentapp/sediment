@@ -14,7 +14,7 @@ from typing import Any, TypedDict
 
 import httpx
 import yaml
-from knowledge_schema import SOURCES
+from knowledge_schema import CHUNK_OVERLAP, CHUNK_SIZE, SOURCES
 from knowledge_schema import embed as _embed
 from qdrant_client import QdrantClient
 from qdrant_client.http.exceptions import ResponseHandlingException, UnexpectedResponse
@@ -29,10 +29,9 @@ from qdrant_client.models import (
 )
 
 from sediment._common import load_profile, sanitize
+from sediment.kinds import KindResolver
 from sediment.spaces import SpaceDerivationError, SpaceExcluded, SpaceResolver
 
-CHUNK_SIZE = 800  # chars
-CHUNK_OVERLAP = 100
 BATCH_SIZE = 64
 
 
@@ -306,6 +305,8 @@ def ensure_payload_indexes(client: QdrantClient, collection: str) -> None:
     for field, schema in (
         ("space", PayloadSchemaType.KEYWORD),
         ("source", PayloadSchemaType.KEYWORD),
+        ("space_kind", PayloadSchemaType.KEYWORD),
+        ("doc_kind", PayloadSchemaType.KEYWORD),
         ("ts", PayloadSchemaType.INTEGER),
     ):
         _qdrant_call(
@@ -335,6 +336,7 @@ def load_collection(
     """
     print(f"\n=== {collection} ({', '.join(sources)}) raw_dir={raw_dir} ===")
 
+    kinds = KindResolver.from_raw_dir(raw_dir)
     files = collect_files(sources, raw_dir)
     print(f"Found {len(files)} raw files")
 
@@ -411,11 +413,15 @@ def load_collection(
         if old_hash is not None:
             changed_files.append(rel_path)
         chunks = chunk_text(text, source, rel_path)
+        space_kind = kinds.space_kind(source, space)
+        doc_kind = kinds.doc_kind(source, rel_path)
         for c in chunks:
             c["content_hash"] = h
             c["space"] = space
             c["space_name"] = space_name
             c["ts"] = ts
+            c["space_kind"] = space_kind
+            c["doc_kind"] = doc_kind
         all_chunks.extend(chunks)
 
     print(f"Skipped {skipped_files} unchanged files")
@@ -513,6 +519,11 @@ def load_collection(
                     "space": c["space"],
                     "space_name": c["space_name"],
                     "ts": c["ts"],
+                    # absent, not null, when the source cannot say: a point with
+                    # no kind is invisible to a kind filter, which is the honest
+                    # answer, while null would be a value that matches nothing
+                    **({"space_kind": c["space_kind"]} if c["space_kind"] else {}),
+                    **({"doc_kind": c["doc_kind"]} if c["doc_kind"] else {}),
                 },
             )
             for c, emb in zip(batch, embeddings)

@@ -30,10 +30,13 @@ from sediment.sources import (
     SpaceDerivationError,
     SpaceExcluded,
     add_dir_entry,
+    write_space_kinds,
 )
 
-# Mattermost channel types, as the `type` field spells them.
-CHANNEL_TYPES = {"O": "public", "P": "private", "G": "group", "D": "direct"}
+# Mattermost channel types, as the `type` field spells them, mapped to the
+# space_kind recorded for them. One dict, not two: these names are both what the
+# config help prints and what ends up in Qdrant, and they must not drift apart.
+CHANNEL_TYPES = {"O": "public", "P": "private", "G": "group_dm", "D": "dm"}
 
 _MAX_DISCOVERED_NAME_CHARS = 120
 _MM_ID_RE = re.compile(r"[a-z0-9]{26}")
@@ -130,16 +133,20 @@ def _discover_channels(
     exclusions: Exclusions,
     user_cache: Mapping[str, str],
     until_ms: int,
-) -> list[Channel]:
+) -> tuple[list[Channel], dict[str, str]]:
     """Channels the account is a member of that the profile does not list.
 
     Returns [] unless the profile opts in with a `discover` section; the opt-in
     names the channel types to pick up, so "public channels only" and "every
     conversation with recent traffic" are the same mechanism at different settings.
+
+    The second half of the return is {space: space_kind} for every channel the
+    listing showed, pinned ones included — a channel's type lives only in the
+    API, so this is the one moment it can be recorded.
     """
     discover = mm_cfg.get("discover")
     if not discover:
-        return []
+        return [], {}
     unknown = set(discover) - {"types", "active_within_days"}
     if unknown:
         raise ValueError(f"Unknown keys in mattermost.discover: {', '.join(sorted(unknown))}")
@@ -183,12 +190,15 @@ def _discover_channels(
     taken_dirs = {c.dir_name for c in pinned}
     discovered: list[Channel] = []
     per_type: Counter[str] = Counter()
+    kinds: dict[str, str] = {}
     skipped_excluded = 0
     for ch in candidates:
         ch_id = ch["id"]
+        ch_type = str(ch.get("type", ""))
+        if ch_type in CHANNEL_TYPES:
+            kinds[make_space("mattermost", ch_id)] = CHANNEL_TYPES[ch_type]
         if ch_id in pinned_ids or ch.get("delete_at"):
             continue
-        ch_type = str(ch.get("type", ""))
         if ch_type not in types:
             continue
         if ch_type in ("O", "P") and ch.get("team_id") != team_id:
@@ -217,7 +227,7 @@ def _discover_channels(
         f"  Discovery: {len(candidates)} joined, {len(pinned)} pinned, "
         f"{len(discovered)} auto ({by_type or 'none'}), {skipped_excluded} excluded"
     )
-    return discovered
+    return discovered, kinds
 
 
 def _existing_dirs_by_id(raw_dir: Path) -> dict[str, Path]:
@@ -279,7 +289,11 @@ def fetch_mattermost_posts(profile: dict[str, Any], since_dt: datetime, until_dt
         users_page += 1
     print(f"  Loaded {len(user_cache)} users")
 
-    discovered = _discover_channels(base_url, token, mm, pinned, exclusions, user_cache, until_ms)
+    discovered, space_kinds = _discover_channels(
+        base_url, token, mm, pinned, exclusions, user_cache, until_ms
+    )
+    if space_kinds:
+        write_space_kinds(raw_dir, space_kinds)
     channels = pinned + discovered
     existing_by_id = _existing_dirs_by_id(raw_dir)
     first_seen = [c for c in discovered if c.id not in existing_by_id]
@@ -477,4 +491,6 @@ SOURCE = Source(
     fetch=_fetch,
     derive_space=_derive_space,
     space_context=_space_context,
+    # kind varies per channel and lives only in the API — see the sidecar
+    doc_kind=lambda rel_path: "thread",
 )

@@ -15,10 +15,14 @@ understand whether or not the importer that produced it is installed.
 """
 
 import argparse
+import json
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime
+from pathlib import Path
 from typing import Any
+
+from knowledge_schema import SPACE_KINDS
 
 from sediment._common import (
     HttpError,
@@ -40,10 +44,18 @@ __all__ = [
     "http_get",
     "is_already_recorded",
     "last_post_ts_ms",
+    "read_space_kinds",
     "recorded_post_counts",
     "safe_path_component",
     "sanitize",
+    "write_space_kinds",
 ]
+
+# Sidecar next to a source's raw files: {space: space_kind}. A channel's type is
+# known to the fetcher (it comes off the API listing) and nowhere in the path, so
+# the fetcher records it here and the loader reads it back. Kept beside the files
+# it describes: fetch and load always run on the same host for a given source.
+SPACE_KINDS_FILE = "_kinds.json"
 
 
 class SpaceDerivationError(Exception):
@@ -88,6 +100,33 @@ def _no_arguments(parser: argparse.ArgumentParser) -> None:
     return None
 
 
+def _no_doc_kind(rel_path: str) -> str | None:
+    return None
+
+
+def read_space_kinds(source_dir: Path) -> dict[str, str]:
+    """{space: kind} a fetcher recorded for this source; empty when it recorded none."""
+    path = source_dir / SPACE_KINDS_FILE
+    if not path.exists():
+        return {}
+    return json.loads(path.read_text())
+
+
+def write_space_kinds(source_dir: Path, kinds: Mapping[str, str]) -> None:
+    """Merge {space: kind} into the sidecar.
+
+    Merged, not replaced: a fetch window only lists the containers that were
+    active in it, and dropping the rest would strip the kind off everything
+    older on the next load.
+    """
+    unknown = sorted(set(kinds.values()) - set(SPACE_KINDS))
+    if unknown:
+        raise ValueError(f"Unknown space kinds: {', '.join(unknown)}")
+    merged = read_space_kinds(source_dir) | dict(kinds)
+    source_dir.mkdir(parents=True, exist_ok=True)
+    (source_dir / SPACE_KINDS_FILE).write_text(json.dumps(merged, ensure_ascii=False, indent=2, sort_keys=True))
+
+
 @dataclass(frozen=True)
 class Source:
     """One importable source. Instances are what an entry point must resolve to."""
@@ -105,6 +144,14 @@ class Source:
     # Source-specific raw-fetch flags. Names must stay unique across sources —
     # they share one parser.
     add_arguments: Callable[[argparse.ArgumentParser], None] = _no_arguments
+    # Kind of every space this source owns, when they are all alike (a YouTrack
+    # space is always a project). None means the kind varies per space and the
+    # fetcher records it in the sidecar instead.
+    space_kind: str | None = None
+    # (rel_path) -> doc kind, when the layout says what a file is. Returning None
+    # leaves the point without one rather than guessing: a wrong kind is a filter
+    # that silently hides documents.
+    doc_kind: Callable[[str], str | None] = _no_doc_kind
 
 
 def add_dir_entry(

@@ -69,9 +69,9 @@ Source *names* are not part of that: `knowledge_schema.SOURCES` stays complete o
 
 A uv workspace with three members:
 
-- **`packages/sediment`** — the batch pipeline: CLI `raw-fetch` + `sediment-load`. Runs on cron in k8s, and on systemd timers locally and on a workstation.
-- **`packages/sediment-mcp`** — the MCP server (Streamable HTTP + Bearer auth). Tools: `search(collection, query, keywords, source, filename, limit)` and `add_knowledge(collection, text, source, file, title)` for manual notes.
-- **`packages/knowledge-schema`** — the shared contract: `SOURCES` (the list of valid `source` values for filtering), `embed(texts, embed_url, model, api_key=None)`. Imported by both packages so that the writer and the reader never drift apart.
+- **`packages/sediment`** — the batch pipeline: CLI `raw-fetch` + `sediment-load`, plus payload-only migrations (`sediment-backfill-*`). Runs on cron in k8s, and on systemd timers locally and on a workstation.
+- **`packages/sediment-mcp`** — the MCP server (Streamable HTTP + Bearer auth). Tools: `search(collection, query, keywords, source, filename, space, space_kind, doc_kind, since, until, limit)`, `get_document(collection, file, from_chunk)` to read a whole document search returned a chunk of, and `add_knowledge(collection, text, source, file, title)` for manual notes.
+- **`packages/knowledge-schema`** — the shared contract: `SOURCES` (the list of valid `source` values for filtering), `embed(texts, embed_url, model, api_key=None)`, the chunk geometry (`CHUNK_SIZE`/`CHUNK_OVERLAP`) the loader splits by and the reader stitches back, and the `SPACE_KINDS`/`DOC_KINDS` vocabularies. Imported by both packages so that the writer and the reader never drift apart.
 
 ## Quickstart (dev)
 

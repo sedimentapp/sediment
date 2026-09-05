@@ -17,6 +17,7 @@ raw-fetch = "sediment.raw_fetch:main"
 sediment-load = "sediment.load:main"
 sediment-backfill-acl = "sediment.backfill_acl:main"
 sediment-backfill-lc = "sediment.backfill_lc:main"
+sediment-backfill-kind = "sediment.backfill_kind:main"
 sediment-backfill-ts = "sediment.backfill_ts:main"
 
 [build-system]

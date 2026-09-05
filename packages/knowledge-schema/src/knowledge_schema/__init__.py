@@ -2,7 +2,10 @@
 
 Payload fields written into Qdrant points (all optional except text/source/file):
     text, text_lc, source, file, file_lc, title, filename, chunk_index,
-    content_hash, space, space_name, visibility, author
+    content_hash, space, space_name, space_kind, doc_kind, ts, visibility, author
+
+`ts` is epoch seconds of the raw file's mtime at load time (content freshness,
+not load time), stamped by the server on manual entries.
 
 `text_lc`/`file_lc` are lowercase shadows of text/file: Qdrant MatchText on an
 unindexed field is a case-sensitive substring match, so the reader's default
@@ -14,7 +17,10 @@ prefix comes from SPACE_PREFIXES and key is the stable source-side id
 (Mattermost channel_id, YouTrack project short name, Telegram chat_id,
 Claude Code project, or the authoring principal for manual entries).
 `space_name` is the human-readable counterpart (display/debug only, never
-used for enforcement). `visibility` ("owner"/"org") and `author` are set
+used for enforcement). `space_kind` says what sort of container the space is
+and `doc_kind` what sort of document the point came from — both are filters
+only, never enforcement, and both may be absent on points written before the
+producing source learned to set them. `visibility` ("owner"/"org") and `author` are set
 only on manual entries stamped by sediment-mcp's add_knowledge.
 
 Collections are declared per deployment in the loader profile.
@@ -35,6 +41,38 @@ SPACE_PREFIXES: dict[str, str] = {
 }
 
 VISIBILITY_VALUES: tuple[str, ...] = ("owner", "org")
+
+# What kind of container a space is. Deliberately source-native rather than a
+# forced common vocabulary, with one rule: a value used by two sources must mean
+# the same thing in both ("dm" is one-on-one everywhere; Mattermost's multi-party
+# DM is "group_dm", which is not Telegram's "group").
+SPACE_KINDS: tuple[str, ...] = (
+    "public",     # mattermost O
+    "private",    # mattermost P
+    "group_dm",   # mattermost G
+    "dm",         # mattermost D, telegram user
+    "bot",        # telegram bot
+    "group",      # telegram group/supergroup
+    "channel",    # telegram broadcast
+    "project",    # youtrack, claude
+    "manual",     # add_knowledge
+)
+
+# What kind of document a point came from, within its space.
+DOC_KINDS: tuple[str, ...] = (
+    "issue",      # youtrack
+    "article",    # youtrack knowledge base
+    "thread",     # mattermost, telegram
+    "session",    # claude code transcript
+    "subagent",   # claude code subagent transcript
+    "note",       # add_knowledge
+)
+
+# Chunk geometry. Shared because both halves depend on it: the loader splits
+# with these numbers, and the reader strips the carried-over CHUNK_OVERLAP tail
+# back out when it stitches a document from its chunks.
+CHUNK_SIZE: int = 800
+CHUNK_OVERLAP: int = 100
 
 
 def make_space(kind: str, key: str) -> str:

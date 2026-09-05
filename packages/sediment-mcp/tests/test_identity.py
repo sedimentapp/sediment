@@ -107,8 +107,11 @@ def test_manual_payload_is_server_stamped():
         "file": "notes/x",
         "file_lc": "notes/x",
         "space": "manual:carol",
+        "space_kind": "manual",
+        "doc_kind": "note",
         "author": "carol",
         "visibility": "owner",
+        "chunk_index": 0,
     }
 
 

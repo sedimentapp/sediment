@@ -4,20 +4,38 @@ import os
 import re
 import time
 import uuid
+from collections.abc import Mapping
+from datetime import UTC, date, datetime
+from typing import Any
 
 import anyio.to_thread
 from dotenv import load_dotenv
 from fastmcp import FastMCP
 from fastmcp.utilities.logging import get_logger
-from knowledge_schema import SOURCES, VISIBILITY_VALUES, embed, make_space
+from knowledge_schema import (
+    CHUNK_OVERLAP,
+    DOC_KINDS,
+    SOURCES,
+    SPACE_KINDS,
+    VISIBILITY_VALUES,
+    embed,
+    make_space,
+)
 from qdrant_client import QdrantClient
 from qdrant_client.http.exceptions import UnexpectedResponse
 from qdrant_client.models import (
+    Condition,
+    Direction,
     FieldCondition,
     Filter,
+    IsEmptyCondition,
     MatchText,
     MatchValue,
+    OrderBy,
+    PayloadField,
     PointStruct,
+    Range,
+    Record,
 )
 from starlette.requests import Request
 from starlette.responses import PlainTextResponse
@@ -26,13 +44,16 @@ from sediment_mcp.acl import load_acl
 from sediment_mcp.auth import build_auth_provider, current_principal
 from sediment_mcp.extensions import load_extensions
 from sediment_mcp.limits import (
+    MAX_CHUNK_INDEX,
     MAX_COLLECTION_CHARS,
+    MAX_DOCUMENT_CHARS,
     MAX_FILENAME_CHARS,
     MAX_KEYWORD_CHARS,
     MAX_KEYWORDS,
     MAX_MANUAL_TEXT_CHARS,
     MAX_QUERY_CHARS,
     MAX_SEARCH_LIMIT,
+    MAX_SPACE_CHARS,
     MAX_TITLE_CHARS,
     RateLimitMiddleware,
     rate_limit_per_minute,
@@ -125,11 +146,51 @@ def _substring_condition(field: str, needle: str) -> FieldCondition:
     return FieldCondition(key=f"{field}_lc", match=MatchText(text=needle.lower()))
 
 
+_DAY_SECONDS = 86_400
+
+
+def _parse_ts_bound(value: str, *, upper: bool) -> int:
+    """Parse a user-supplied date bound into epoch seconds.
+
+    A bare "YYYY-MM-DD" names a whole UTC day, so as an upper bound it means
+    that day's last second — otherwise `until` would silently drop everything
+    written on the day the caller named. A timestamp without an offset is read
+    as UTC, matching `ts` (epoch seconds of the raw file's mtime).
+    """
+    text = value.strip()
+    try:
+        if len(text) == 10:
+            day = date.fromisoformat(text)
+            start = int(datetime(day.year, day.month, day.day, tzinfo=UTC).timestamp())
+            return start + _DAY_SECONDS - 1 if upper else start
+        moment = datetime.fromisoformat(text)
+    except ValueError as exc:
+        raise ValueError(
+            f"Invalid date {value!r}: use YYYY-MM-DD or an ISO timestamp "
+            "such as 2026-03-01T12:00:00Z."
+        ) from exc
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=UTC)
+    return int(moment.timestamp())
+
+
+def _ts_range(since: str | None, until: str | None) -> Range | None:
+    gte = _parse_ts_bound(since, upper=False) if since else None
+    lte = _parse_ts_bound(until, upper=True) if until else None
+    if gte is None and lte is None:
+        return None
+    if gte is not None and lte is not None and gte > lte:
+        raise ValueError("`since` must not be later than `until`.")
+    return Range(gte=gte, lte=lte)
+
+
 def _build_filter(
     keywords: list[str] | None,
     source: str | None,
     filename: str | None,
     acl_condition: Filter | None,
+    ts_range: Range | None = None,
+    exact: Mapping[str, str | None] | None = None,
 ) -> Filter | None:
     conditions = []
     if keywords:
@@ -139,6 +200,11 @@ def _build_filter(
         conditions.append(FieldCondition(key="source", match=MatchValue(value=source)))
     if filename:
         conditions.append(_substring_condition("file", filename))
+    for field, value in (exact or {}).items():
+        if value:
+            conditions.append(FieldCondition(key=field, match=MatchValue(value=value)))
+    if ts_range is not None:
+        conditions.append(FieldCondition(key="ts", range=ts_range))
     if acl_condition is not None:
         # must = AND: user params can only narrow the ACL scope, never widen it
         conditions.append(acl_condition)
@@ -149,7 +215,9 @@ def _format_result(r, show_score: bool = True) -> str:
     p = r.payload
     score = f"[{r.score:.3f}] " if show_score and r.score is not None else ""
     title = f"\n  {p['title']}" if p.get("title") else ""
-    return f"{score}{p['source']}/{p['file']}{title}\n\n{p['text']}"
+    # "source: file", not "source/file": the file already starts with the source
+    # directory, and a doubled prefix is what get_document would be handed back
+    return f"{score}{p['source']}: {p['file']}{title}\n\n{p['text']}"
 
 
 def _collection_error(collection: str) -> str | None:
@@ -203,6 +271,11 @@ def search(
     keywords: list[str] | None = None,
     source: str | None = None,
     filename: str | None = None,
+    space: str | None = None,
+    space_kind: str | None = None,
+    doc_kind: str | None = None,
+    since: str | None = None,
+    until: str | None = None,
     limit: int = 20,
 ) -> str:
     """Search a knowledge base collection.
@@ -213,12 +286,36 @@ def search(
         keywords: Substring filters (AND logic), case-insensitive. Wrap a keyword in double quotes ('"YouTrack"') to force exact-case matching. Good for IPs, hostnames, ticket IDs.
         source: Filter by source. One of: "youtrack", "mattermost", "claude", "telegram", "manual".
         filename: Substring filter on the file field, case-insensitive (e.g. "vn-242" to find by ticket ID); double-quote to force exact case.
+        space: Exact container id — one project, channel or chat ("yt:<project>", "mm:<channel id>", "tg:<chat id>", "cc:<project>", "manual:<user>").
+        space_kind: Kind of container: "public", "private", "group_dm", "dm" (Mattermost), "dm", "bot", "group", "channel" (Telegram), "project" (YouTrack, Claude Code), "manual". Use "dm" to reach one-on-one conversations, or filter them out.
+        doc_kind: Kind of document: "issue", "article" (YouTrack), "thread" (chats), "session", "subagent" (Claude Code), "note" (manual).
+        since: Keep only documents from this date on. "YYYY-MM-DD" (UTC) or an ISO timestamp. Dates come from the source content, not from indexing time; documents with no date are excluded whenever since/until is set.
+        until: Keep only documents up to this date; a bare "YYYY-MM-DD" includes that whole day.
         limit: Max results (default 20).
+
+    A date range alone is a valid search: with no query it lists that period newest first,
+    which is the cheap way to ask "what happened in March" without a semantic guess.
+    Results are chunks — use get_document to read one of them in full.
+
+    space/space_kind/doc_kind are filters, never access control, and they match only
+    points that carry the field: content indexed before its source learned to label
+    itself has no kind and is invisible to a kind filter.
     """
     if error := _search_input_error(collection, query, keywords, filename, limit):
         return error
-    if not query and not keywords and not filename:
-        return "Provide either a query, keywords, or filename."
+    if space is not None and (not space or len(space) > MAX_SPACE_CHARS):
+        return f"Space must contain 1-{MAX_SPACE_CHARS} characters."
+    if space_kind is not None and space_kind not in SPACE_KINDS:
+        return f"Unknown space_kind {space_kind!r}. Allowed: {', '.join(SPACE_KINDS)}."
+    if doc_kind is not None and doc_kind not in DOC_KINDS:
+        return f"Unknown doc_kind {doc_kind!r}. Allowed: {', '.join(DOC_KINDS)}."
+    try:
+        ts_range = _ts_range(since, until)
+    except ValueError as exc:
+        return str(exc)
+    narrowed = any((query, keywords, filename, space, space_kind, doc_kind)) or ts_range is not None
+    if not narrowed:
+        return "Provide a query, keywords, filename, space, kind, or a since/until date range."
     if source is not None and source not in SEARCH_SOURCES:
         return f"Unknown source {source!r}. Allowed: {', '.join(SEARCH_SOURCES)}."
 
@@ -230,7 +327,14 @@ def search(
             return f"Collection {collection!r} is not accessible."
         acl_condition = grant.space_condition()
 
-    qfilter = _build_filter(keywords, source, filename, acl_condition)
+    qfilter = _build_filter(
+        keywords,
+        source,
+        filename,
+        acl_condition,
+        ts_range,
+        {"space": space, "space_kind": space_kind, "doc_kind": doc_kind},
+    )
 
     try:
         if query:
@@ -240,8 +344,15 @@ def search(
             )
             items = [_format_result(r) for r in results.points]
         else:
+            # Newest first only when a date range is set: order_by drops points
+            # that lack the key, and pre-ts entries must stay findable by keyword.
+            order_by = OrderBy(key="ts", direction=Direction.DESC) if ts_range else None
             results, _ = client.scroll(
-                collection, scroll_filter=qfilter, limit=limit, with_payload=True
+                collection,
+                scroll_filter=qfilter,
+                limit=limit,
+                with_payload=True,
+                order_by=order_by,
             )
             items = [_format_result(r, show_score=False) for r in results]
     except UnexpectedResponse as e:
@@ -255,6 +366,137 @@ def search(
     return f"Found {len(items)} results:\n\n" + "\n\n---\n\n".join(items)
 
 
+# One call reads at most this many chunks; the char budget cuts it shorter on
+# dense documents and the caller pages on with from_chunk.
+_DOCUMENT_WINDOW = 96
+
+
+def _payload(point: Record) -> dict[str, Any]:
+    # every filter these points come back through matches on a payload field,
+    # so a payload-less point would mean Qdrant contradicted its own query
+    if point.payload is None:
+        raise RuntimeError(f"Point {point.id} came back without a payload")
+    return point.payload
+
+
+def _chunk_index(point: Record) -> int:
+    return _payload(point).get("chunk_index", 0)
+
+
+def _stitch(texts: list[str]) -> str:
+    """Join consecutive chunks back into document text.
+
+    The loader starts each chunk with the previous chunk's last CHUNK_OVERLAP
+    characters, so that repeat is dropped here. Only an exact overlap-length
+    match counts — a shorter coincidence would eat real text, and a gap in
+    chunk_index (the loader drops chunks under 30 chars) simply won't match.
+
+    Repeats inside a chunk are left alone: a paragraph longer than CHUNK_SIZE is
+    hard-split into overlapping pieces that the loader packs as if they were
+    separate paragraphs, and the "\n\n" they are joined with is ambiguous enough
+    that undoing it drops real text. A visible repeat beats a silent hole.
+    """
+    out: list[str] = []
+    previous = ""
+    for text in texts:
+        if out and len(previous) > CHUNK_OVERLAP and text[:CHUNK_OVERLAP] == previous[-CHUNK_OVERLAP:]:
+            # removeprefix, not lstrip: the loader glued the carried-over tail on
+            # with exactly one "\n\n", and a piece of its own may start with a newline
+            out.append(text[CHUNK_OVERLAP:].removeprefix("\n\n"))
+        else:
+            out.append(text)
+        previous = text
+    return "\n\n".join(out)
+
+
+@mcp.tool()
+def get_document(collection: str, file: str, from_chunk: int = 0) -> str:
+    """Read one whole document that search returned a chunk of.
+
+    Search scores chunks; this reassembles the chunks of a single file into the
+    document text, in order and with the loader's chunk overlap removed.
+
+    Args:
+        collection: Qdrant collection name (e.g. "acme", "globex").
+        file: Exact value of the file field as printed by search after "source: " ("mattermost/apps__c8fh/2026-03.md"). Not a substring — use search(filename=...) to find it.
+        from_chunk: Resume at this chunk index. Long documents come back truncated with the index to continue from.
+    """
+    if error := _collection_error(collection):
+        return error
+    if not file or len(file) > MAX_FILENAME_CHARS:
+        return f"File must contain 1-{MAX_FILENAME_CHARS} characters."
+    if not 0 <= from_chunk <= MAX_CHUNK_INDEX:
+        return f"from_chunk must be between 0 and {MAX_CHUNK_INDEX}."
+
+    acl_condition = None
+    if ACL is not None:
+        grant = ACL.resolve(current_principal())
+        if collection not in grant.collections:
+            return f"Collection {collection!r} is not accessible."
+        acl_condition = grant.space_condition()
+
+    conditions: list[Condition] = [FieldCondition(key="file", match=MatchValue(value=file))]
+    if acl_condition is not None:
+        conditions.append(acl_condition)
+    window: list[Condition] = [
+        FieldCondition(
+            key="chunk_index",
+            range=Range(gte=from_chunk, lt=from_chunk + _DOCUMENT_WINDOW),
+        )
+    ]
+    if from_chunk == 0:
+        # manual entries carry no chunk_index; without this they would be
+        # invisible to get_document while search happily returns them
+        window.append(IsEmptyCondition(is_empty=PayloadField(key="chunk_index")))
+
+    try:
+        total = client.count(
+            collection, count_filter=Filter(must=conditions), exact=True
+        ).count
+        points, _ = client.scroll(
+            collection,
+            scroll_filter=Filter(must=[*conditions, Filter(should=window)]),
+            limit=_DOCUMENT_WINDOW,
+            with_payload=True,
+        )
+    except UnexpectedResponse as e:
+        if e.status_code == 404:
+            return f"Collection {collection!r} is not accessible."
+        raise
+
+    if not points:
+        if total:
+            return f"No chunks at or after index {from_chunk}; {file!r} has {total}."
+        return (
+            f"No document {file!r} in {collection!r}. The file must match exactly — "
+            "use search(filename=...) to find its exact value."
+        )
+
+    points.sort(key=_chunk_index)
+    texts: list[str] = []
+    used = 0
+    next_chunk = None
+    for point in points:
+        text = _payload(point)["text"]
+        if texts and used + len(text) > MAX_DOCUMENT_CHARS:
+            next_chunk = _chunk_index(point)
+            break
+        texts.append(text)
+        used += len(text)
+    if next_chunk is None and len(points) == _DOCUMENT_WINDOW and len(texts) < total:
+        next_chunk = _chunk_index(points[-1]) + 1
+
+    head = _payload(points[0])
+    span = f"{_chunk_index(points[0])}-{_chunk_index(points[len(texts) - 1])}"
+    header = f"{head['source']}: {file} — chunks {span} of {total}"
+    if head.get("title"):
+        header += f"\n{head['title']}"
+    body = _stitch(texts)
+    if next_chunk is not None:
+        body += f"\n\n[Truncated. Continue with from_chunk={next_chunk}.]"
+    return f"{header}\n\n{body}"
+
+
 def _manual_payload(principal: str, text: str, file: str, title: str, visibility: str) -> dict:
     """Server-stamped payload for manual entries: source/space/author are never
     client-controlled — otherwise a client could plant content into another
@@ -266,9 +508,12 @@ def _manual_payload(principal: str, text: str, file: str, title: str, visibility
         "file": file,
         "file_lc": file.lower(),
         "space": make_space("manual", principal),
+        "space_kind": "manual",
+        "doc_kind": "note",
         "author": principal,
         "visibility": visibility,
         "ts": int(time.time()),
+        "chunk_index": 0,
     }
     if title:
         payload["title"] = title

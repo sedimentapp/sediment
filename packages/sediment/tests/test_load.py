@@ -7,6 +7,7 @@ from qdrant_client import QdrantClient
 from qdrant_client.models import FieldCondition, Filter, MatchValue
 
 import sediment.load as ql
+from sediment.sources import read_space_kinds, write_space_kinds
 from sediment.spaces import SpaceResolver
 
 DIM = 8
@@ -308,3 +309,60 @@ def test_discovered_directory_loads_without_being_in_the_config(tmp_path, client
     (point,) = points_by_file(client, rel)
     assert point["space"] == "mm:pgsr7cnjtjno7qcyt13aiwstjy"
     assert point["space_name"] == "host-alerts"
+
+
+def test_youtrack_kinds_come_from_the_id(tmp_path, client, spaces):
+    raw = tmp_path / "raw"
+    write(raw, "youtrack/INF-42.md", f"# INF-42\n\n{LONG}")
+    write(raw, "youtrack/INF-A-7.md", f"# INF-A-7\n\n{LONG}")
+
+    load(client, raw, spaces)
+
+    assert points_by_file(client, "youtrack/INF-42.md")[0]["doc_kind"] == "issue"
+    assert points_by_file(client, "youtrack/INF-A-7.md")[0]["doc_kind"] == "article"
+    assert points_by_file(client, "youtrack/INF-42.md")[0]["space_kind"] == "project"
+
+
+def test_mattermost_space_kind_comes_from_the_sidecar(tmp_path, client, spaces):
+    raw = tmp_path / "raw"
+    write(raw, "mattermost/infra/thread.md", f"# infra\n\n{LONG}")
+    write_space_kinds(raw / "mattermost", {"mm:chanidinfra": "private"})
+
+    load(client, raw, spaces)
+
+    payload = points_by_file(client, "mattermost/infra/thread.md")[0]
+    assert payload["space_kind"] == "private"
+    assert payload["doc_kind"] == "thread"
+
+
+def test_a_channel_missing_from_the_sidecar_gets_no_space_kind(tmp_path, client, spaces):
+    raw = tmp_path / "raw"
+    write(raw, "mattermost/infra/thread.md", f"# infra\n\n{LONG}")
+
+    load(client, raw, spaces)
+
+    payload = points_by_file(client, "mattermost/infra/thread.md")[0]
+    assert "space_kind" not in payload
+    assert payload["doc_kind"] == "thread"
+
+
+def test_sidecar_merges_instead_of_replacing(tmp_path):
+    source_dir = tmp_path / "mattermost"
+    write_space_kinds(source_dir, {"mm:one": "public"})
+    write_space_kinds(source_dir, {"mm:two": "dm"})
+
+    assert read_space_kinds(source_dir) == {"mm:one": "public", "mm:two": "dm"}
+
+
+def test_sidecar_refuses_an_unknown_kind(tmp_path):
+    with pytest.raises(ValueError, match="Unknown space kinds"):
+        write_space_kinds(tmp_path / "mattermost", {"mm:one": "chanel"})
+
+
+def test_hand_edited_sidecar_with_a_bad_kind_fails_the_load(tmp_path, client, spaces):
+    raw = tmp_path / "raw"
+    write(raw, "mattermost/infra/thread.md", f"# infra\n\n{LONG}")
+    (raw / "mattermost" / "_kinds.json").write_text('{"mm:chanidinfra": "chanel"}')
+
+    with pytest.raises(RuntimeError, match="unknown space kinds"):
+        load(client, raw, spaces)
