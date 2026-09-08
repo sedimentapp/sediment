@@ -65,6 +65,9 @@ load_dotenv()
 QDRANT_URL = os.environ["QDRANT_URL"]
 EMBED_URL = os.environ["EMBED_URL"]
 EMBED_MODEL = os.environ["EMBED_MODEL"]
+EMBED_QUERY_INSTRUCTION = os.environ.get("EMBED_QUERY_INSTRUCTION")
+if EMBED_QUERY_INSTRUCTION is not None and not EMBED_QUERY_INSTRUCTION.strip():
+    raise ValueError("EMBED_QUERY_INSTRUCTION must be non-empty when configured")
 # Bearer token for external OpenAI-compatible embedding providers; a local
 # llama.cpp needs none. Must match the provider the collections were built with.
 EMBED_API_KEY = os.environ.get("EMBED_API_KEY")
@@ -340,7 +343,10 @@ def search(
     try:
         if query:
             validate_index(client.get_collection(collection).config, EMBED_MODEL)
-            vector = embed([query], EMBED_URL, EMBED_MODEL, timeout=30, api_key=EMBED_API_KEY)[0]
+            embedding_query = query
+            if EMBED_QUERY_INSTRUCTION is not None:
+                embedding_query = f"Instruct: {EMBED_QUERY_INSTRUCTION}\nQuery: {query}"
+            vector = embed([embedding_query], EMBED_URL, EMBED_MODEL, timeout=30, api_key=EMBED_API_KEY)[0]
             validate_index(client.get_collection(collection).config, EMBED_MODEL, len(vector))
             results = client.query_points(
                 collection, query=vector, query_filter=qfilter, limit=limit

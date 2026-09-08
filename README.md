@@ -119,6 +119,7 @@ Any OpenAI-compatible `/v1/embeddings` will do — your own llama.cpp (`llama-se
 
 - `EMBED_URL` — the server base (`/v1/embeddings` is appended automatically; a URL that already ends with `/embeddings` is used as is — for non-standard prefixes such as Gemini's `/v1beta/openai/embeddings`);
 - `EMBED_MODEL` — the model name at the provider;
+- `EMBED_QUERY_INSTRUCTION` — optional query-only instruction for instruction-aware embeddings; documents and manual notes remain unprefixed;
 - `EMBED_API_KEY` — the Bearer key, only for external providers.
 
 The writer (`sediment-load`) and the reader (`sediment-mcp`) must use the same model — query and document vectors have to live in one space. Before starting, `sediment-load` makes a probe embedding call (validating the URL/model/key) and fails if the model's dimensionality does not match the existing collection; changing the model means `--rebuild --yes-really-rebuild` for every collection. The loader re-runs `sanitize()` over old raw files, preserves their mtime and reindexes the cleaned content. In k8s the key comes from the SOPS `secrets.yaml`: in the `sediment` chart it is enabled simply by having `EMBED_API_KEY` in the `secrets: {ENV_NAME: value}` map, in the `sediment-mcp` chart — via `embedApiKeyFromSecret: true` in values.

@@ -22,3 +22,16 @@ def test_reader_rejects_same_dimension_different_model(qdrant, monkeypatch, oper
             server.get_document("acme", "youtrack/ACME-1.md")
         else:
             server.add_knowledge("acme", "A meaningful manual note.", "notes/test")
+
+
+def test_query_instruction_does_not_prefix_manual_documents(qdrant, monkeypatch):
+    monkeypatch.setattr(server, "EMBED_QUERY_INSTRUCTION", "Find relevant passages.")
+    monkeypatch.setattr(server, "current_principal", lambda: "alice")
+    calls = []
+    def recording(texts, *args, **kwargs):
+        calls.append(texts)
+        return [[0.1, 0.2, 0.3, 0.4] for _ in texts]
+    monkeypatch.setattr(server, "embed", recording)
+    server.search("acme", query="Where is the configuration?")
+    server.add_knowledge("acme", "A meaningful manual note.", "notes/instruction-test")
+    assert calls == [["Instruct: Find relevant passages.\nQuery: Where is the configuration?"], ["A meaningful manual note."]]
