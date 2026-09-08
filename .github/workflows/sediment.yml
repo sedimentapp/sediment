@@ -18,9 +18,7 @@ env:
 
 jobs:
   test:
-    # The private mirror lives on Forgejo and has its own deploy CI under
-    # .forgejo/workflows, so this workflow must stay quiet there. The condition
-    # allows any fork on github.com and excludes non-GitHub instances.
+    # Run only on GitHub, including forks.
     if: github.server_url == 'https://github.com'
     runs-on: ubuntu-latest
     steps:
@@ -40,9 +38,7 @@ jobs:
           uv run --no-dev --with basedpyright==1.39.3 basedpyright
 
   build-and-push:
-    # The private mirror lives on Forgejo and has its own deploy CI under
-    # .forgejo/workflows, so this workflow must stay quiet there. The condition
-    # allows any fork on github.com and excludes non-GitHub instances.
+    # Run only on GitHub, including forks.
     if: github.server_url == 'https://github.com'
     needs: test
     runs-on: ubuntu-latest

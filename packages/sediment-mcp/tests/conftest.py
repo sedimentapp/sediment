@@ -10,6 +10,7 @@ os.environ.setdefault("MCP_ACL_DISABLE", "1")
 import pytest  # noqa: E402
 from qdrant_client import QdrantClient  # noqa: E402
 from qdrant_client.models import Distance, PayloadSchemaType, PointStruct, VectorParams  # noqa: E402
+from knowledge_schema import index_contract  # noqa: E402
 
 
 @pytest.fixture
@@ -18,7 +19,7 @@ def qdrant(monkeypatch):
     from sediment_mcp import server
 
     client = QdrantClient(":memory:")
-    client.create_collection("acme", vectors_config=VectorParams(size=4, distance=Distance.COSINE))
+    client.create_collection("acme", vectors_config=VectorParams(size=4, distance=Distance.COSINE), metadata={"sediment": index_contract("test-model", 4)})
     client.create_payload_index("acme", "ts", field_schema=PayloadSchemaType.INTEGER)
     monkeypatch.setattr(server, "client", client)
     monkeypatch.setattr(server, "ACL", None)

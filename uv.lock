@@ -919,7 +919,7 @@ wheels = [
 
 [[package]]
 name = "knowledge-schema"
-version = "0.1.0"
+version = "0.2.0rc1"
 source = { editable = "packages/knowledge-schema" }
 
 [package.dev-dependencies]
@@ -2006,7 +2006,7 @@ wheels = [
 
 [[package]]
 name = "sediment"
-version = "0.1.0"
+version = "0.2.0rc1"
 source = { editable = "packages/sediment" }
 dependencies = [
     { name = "httpx" },

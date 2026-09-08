@@ -48,6 +48,29 @@ The point is context isolation: if you run several unrelated tracks (say, your o
 
 ## Sources
 
+Automatic `raw-fetch` runs keep progress per profile/source in
+`<vault_path>/.fetch-state.sqlite3`. The first automatic run requires an explicit
+`--initial-since YYYY-MM-DD`; choose the earliest date that must be collected.
+Subsequent runs omit date flags and catch up in daily windows. Progress is saved
+only after each successful fetch, with the boundary day replayed and a two-day
+overlap retained. After an interrupted initialization, resume without
+`--initial-since` for sources that already have a checkpoint; initialize the
+remaining sources separately using `--profile` and `--source`.
+
+`--since` selects a manual backfill (optionally with `--until`), which never changes
+automatic progress. Source-specific options such as `--articles-only` or
+`--projects` require this manual mode. A missing checkpoint is an error rather
+than an assumed two-day history. Existing timers need a one-time initialization
+before deploying this version. Store the progress database together with its raw
+vault; restore them together. Concurrent writers to the same vault fail visibly
+instead of silently racing their checkpoints.
+
+Each automatic window logs its profile/source, dates, raw file count and last
+success; an empty raw inventory produces a warning. These observations describe
+local collection progress, not proof that an external source exposed all its
+data. Discovery exclusions still apply; changing the configured scope requires
+an explicit historical backfill for newly included data.
+
 Built in are the sources that run unattended in a container: **YouTrack** and **Mattermost**, which need nothing but a URL and a token.
 
 Mattermost channels can be listed by hand (`channels:`) or picked up automatically: `discover: {types: [O, P], active_within_days: 90}` fetches every channel the account has joined of those types — public, private, group DMs, direct — that is not dormant. Auto-added channels get a `<name>__<channel_id>` raw directory, so their `space` is readable straight off the path and they never need a config entry. `exclude: {ids: [], names: []}` bans a channel outright: it is never fetched, never indexed, and whatever it already put in Qdrant is purged on the next load — a ban overrides `channels` too.
@@ -75,6 +98,9 @@ A uv workspace with three members:
 
 ## Quickstart (dev)
 
+For tested wheel bundles, installation without source checkouts, and the
+artifact promotion process, see [Release bundles](docs/releases.md).
+
 ```bash
 uv sync --all-packages
 uv run --package sediment raw-fetch --config-dir . --profile <name> --source mattermost --since 2026-04-01 --until 2026-04-21
@@ -96,6 +122,43 @@ Any OpenAI-compatible `/v1/embeddings` will do — your own llama.cpp (`llama-se
 - `EMBED_API_KEY` — the Bearer key, only for external providers.
 
 The writer (`sediment-load`) and the reader (`sediment-mcp`) must use the same model — query and document vectors have to live in one space. Before starting, `sediment-load` makes a probe embedding call (validating the URL/model/key) and fails if the model's dimensionality does not match the existing collection; changing the model means `--rebuild --yes-really-rebuild` for every collection. The loader re-runs `sanitize()` over old raw files, preserves their mtime and reindexes the cleaned content. In k8s the key comes from the SOPS `secrets.yaml`: in the `sediment` chart it is enabled simply by having `EMBED_API_KEY` in the `secrets: {ENV_NAME: value}` map, in the `sediment-mcp` chart — via `embedApiKeyFromSecret: true` in values.
+
+## Index compatibility and migration
+
+Collections created by the loader carry a `sediment` metadata contract: schema
+version, `EMBED_MODEL`, vector dimension, chunking version, size and overlap.
+This requires [Qdrant 1.16 or newer](https://qdrant.tech/documentation/manage-data/collections/).
+The loader checks every existing target before starting writes. MCP checks the
+contract after authorization and before search, document reads and manual writes.
+An unversioned or incompatible collection is rejected, including a different
+model with the same vector dimension. `EMBED_MODEL` is mandatory for both sides.
+
+Use a stable, revision-specific model name supported by your embedding service.
+The contract checks the configured name, not the weights behind a mutable alias;
+silently replacing weights under the same name cannot be detected by this check.
+Increment the schema or chunking version when changing their semantics.
+
+To migrate an existing installation:
+
+1. Preserve the old collections and back up the complete raw vaults and manual
+   records, including their ownership/visibility. Inventory every source and host;
+   one workstation's raw directory is not necessarily a complete collection.
+2. Create a new profile/collection name configured with the complete source set
+   and the intended model. Run `sediment-load` for the new collection, collecting
+   contributions from all required hosts under the same contract.
+3. Re-embed and import manual records while preserving their ACL payloads.
+   They have no raw-fetch copy: raw-only rebuilding does not restore them.
+   There is no automated manual-record migration command yet.
+4. Verify document/chunk counts, ownership, access and representative queries.
+   Stop writers for a final catch-up, then switch clients and ACL grants to the new
+   collection. Keep the old collection and matching application/model configuration
+   available for rollback until the migration is accepted.
+
+Do not stamp new metadata onto old vectors to bypass validation. The existing
+`--rebuild --yes-really-rebuild` path remains destructive: it deletes the entire
+collection, including manual records and sources absent from the current host.
+It now accepts a changed vector dimension, but cannot be combined with `--source`.
+Use it only for disposable or independently recoverable targets.
 
 ## Type checking and pre-commit
 

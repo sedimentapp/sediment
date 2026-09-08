@@ -2,6 +2,7 @@
 """Load raw knowledge files into Qdrant via OpenAI-compatible embedding server."""
 
 import hashlib
+import logging
 import os
 import re
 import threading
@@ -15,6 +16,7 @@ from typing import Any, TypedDict
 import httpx
 import yaml
 from knowledge_schema import CHUNK_OVERLAP, CHUNK_SIZE, SOURCES
+from knowledge_schema import index_contract, validate_index
 from knowledge_schema import embed as _embed
 from qdrant_client import QdrantClient
 from qdrant_client.http.exceptions import ResponseHandlingException, UnexpectedResponse
@@ -33,6 +35,7 @@ from sediment.kinds import KindResolver
 from sediment.spaces import SpaceDerivationError, SpaceExcluded, SpaceResolver
 
 BATCH_SIZE = 64
+logger = logging.getLogger(__name__)
 
 
 def require_qdrant_url() -> str:
@@ -56,16 +59,10 @@ def embedding_config() -> tuple[str, str]:
     url = os.environ.get("EMBED_URL")
     if not url:
         raise RuntimeError("EMBED_URL environment variable is required")
-    return url, os.environ.get("EMBED_MODEL", "bge-m3")
-
-
-def _err_detail(e: BaseException) -> str:
-    if isinstance(e, urllib.error.HTTPError):
-        body = e.read().decode("utf-8", errors="replace")[:500] if e.fp else ""
-        return f"status={e.code} body={body!r}"
-    if isinstance(e, urllib.error.URLError):
-        return f"reason={e.reason!r}"
-    return repr(e)
+    model = os.environ.get("EMBED_MODEL")
+    if not model:
+        raise RuntimeError("EMBED_MODEL environment variable is required")
+    return url, model
 
 
 def _qdrant_call(op: str, fn, *args, **kwargs):
@@ -263,14 +260,9 @@ def collect_files(sources: list[str], raw_dir: Path) -> list[tuple[str, str, str
     return files
 
 
-def get_indexed_files(client: QdrantClient, collection: str) -> dict[str, str]:
-    """Get {file_path: content_hash} for all files already in Qdrant.
-
-    Files without content_hash (loaded before incremental support)
-    get a sentinel value so they're treated as "present but unknown hash",
-    meaning they'll be skipped unless --rebuild is used.
-    """
-    indexed = {}
+def get_indexed_files(client: QdrantClient, collection: str) -> dict[str, dict[str | int, tuple[Any, Any]]]:
+    """Keep every point's identity, hash and position to detect incomplete files."""
+    indexed: dict[str, dict[str | int, tuple[Any, Any]]] = {}
     offset = None
     while True:
         results, offset = _qdrant_call(
@@ -278,7 +270,7 @@ def get_indexed_files(client: QdrantClient, collection: str) -> dict[str, str]:
             collection,
             limit=1000,
             offset=offset,
-            with_payload=["file", "content_hash"],
+            with_payload=["file", "content_hash", "chunk_index"],
         )
         for r in results:
             if r.payload is None:
@@ -286,9 +278,10 @@ def get_indexed_files(client: QdrantClient, collection: str) -> dict[str, str]:
             f = r.payload.get("file", "")
             if not f:
                 continue
-            h = r.payload.get("content_hash", "")
-            if f not in indexed or h:  # prefer entry with actual hash
-                indexed[f] = h
+            key = r.id if isinstance(r.id, int) else str(r.id)
+            indexed.setdefault(f, {})[key] = (
+                r.payload.get("content_hash"), r.payload.get("chunk_index"),
+            )
         if offset is None:
             break
     return indexed
@@ -337,6 +330,7 @@ def load_collection(
     print(f"\n=== {collection} ({', '.join(sources)}) raw_dir={raw_dir} ===")
 
     kinds = KindResolver.from_raw_dir(raw_dir)
+    contract = index_contract(os.environ["EMBED_MODEL"], dim)
     files = collect_files(sources, raw_dir)
     print(f"Found {len(files)} raw files")
 
@@ -347,19 +341,23 @@ def load_collection(
                 "create_collection", client.create_collection,
                 collection,
                 vectors_config=VectorParams(size=dim, distance=Distance.COSINE),
+                metadata={"sediment": contract},
             )
             print(f"Recreated collection '{collection}'")
         else:
             info = _qdrant_call("get_collection", client.get_collection, collection)
+            validate_index(info.config, os.environ["EMBED_MODEL"], dim)
             print(f"Collection '{collection}' exists: {info.points_count} points")
     else:
         _qdrant_call(
             "create_collection", client.create_collection,
             collection,
             vectors_config=VectorParams(size=dim, distance=Distance.COSINE),
+            metadata={"sediment": contract},
         )
         print(f"Created collection '{collection}'")
 
+    validate_index(_qdrant_call("get_collection", client.get_collection, collection).config, os.environ["EMBED_MODEL"], dim)
     ensure_payload_indexes(client, collection)
 
     # Get already indexed files for incremental mode
@@ -371,9 +369,8 @@ def load_collection(
         indexed = {}
 
     # Chunk only new/changed files
-    all_chunks = []
+    documents = []
     skipped_files = 0
-    changed_files = []
     unmapped: list[SpaceDerivationError] = []
     excluded_reasons: Counter[str] = Counter()
     excluded_indexed: list[str] = []
@@ -406,13 +403,11 @@ def load_collection(
         # mtime, not load time: fetchers only rewrite files that got new
         # content, so this reflects content freshness and survives --rebuild
         ts = int(original_stat.st_mtime)
-        old_hash = indexed.get(rel_path)
-        if old_hash is not None and (old_hash == "" or old_hash == h):
+        chunks = chunk_text(text, source, rel_path)
+        expected = {point_id(rel_path, c["chunk_index"]): (h, c["chunk_index"]) for c in chunks}
+        if indexed.get(rel_path, {}) == expected:
             skipped_files += 1
             continue
-        if old_hash is not None:
-            changed_files.append(rel_path)
-        chunks = chunk_text(text, source, rel_path)
         space_kind = kinds.space_kind(source, space)
         doc_kind = kinds.doc_kind(source, rel_path)
         for c in chunks:
@@ -422,7 +417,7 @@ def load_collection(
             c["ts"] = ts
             c["space_kind"] = space_kind
             c["doc_kind"] = doc_kind
-        all_chunks.extend(chunks)
+        documents.append((rel_path, chunks))
 
     print(f"Skipped {skipped_files} unchanged files")
     if excluded_reasons:
@@ -444,61 +439,38 @@ def load_collection(
         print(f"\n!!! UNMAPPED FILES (not indexed) in '{collection}': {len(unmapped)}")
         for e in unmapped:
             print(f"  {e.rel_path}: {e.reason}")
-    if changed_files:
-        print(f"Changed files: {len(changed_files)}")
-        for f in changed_files:
-            _qdrant_call(
-                "delete", client.delete,
-                collection,
-                points_selector=Filter(must=[FieldCondition(key="file", match=MatchValue(value=f))]),
-            )
-        print("  Deleted old chunks for changed files")
-
-    if not all_chunks:
+    if not documents:
         print("Nothing new to load.")
         info = _qdrant_call("get_collection", client.get_collection, collection)
         print(f"Collection '{collection}': {info.points_count} points")
         return unmapped
 
-    files_with_chunks = len({c["file"] for c in all_chunks})
-    print(f"Loading {len(all_chunks)} new chunks from {files_with_chunks} files")
+    total = sum(len(chunks) for _, chunks in documents)
+    print(f"Loading {total} new chunks from {len(documents)} files")
 
-    # Embed and upsert decoupled across a thread pool: while one worker waits on
-    # a Qdrant upsert (network) another keeps the embedding server busy (GPU),
-    # and concurrent embed requests let that server batch them. workers=1 is the
-    # plain sequential path. Order is irrelevant — point ids are deterministic
-    # and upserts are idempotent.
+    # Prepare an entire document before overwriting any of its existing points.
+    # A partial upsert is detected by the next scan; stale points are removed last.
     t0 = time.time()
-    total = len(all_chunks)
-    incomplete_files: set[str] = set()
-    batches = [all_chunks[i : i + BATCH_SIZE] for i in range(0, total, BATCH_SIZE)]
     lock = threading.Lock()
     done = 0
 
-    def embed_with_salvage(batch: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[list[float]]]:
-        try:
-            return batch, embed([c["text"] for c in batch])
-        except (urllib.error.URLError, TimeoutError, KeyError) as e:
-            # Batch failed (network, timeout, or malformed response). Retry each chunk individually
-            # to salvage as many as possible; transient failures schedule the file for retry next run,
-            # 4xx responses are logged and left in place (retry won't help).
-            print(f"  Batch error ({type(e).__name__}: {_err_detail(e)}), retrying individually...")
-            embeddings: list[list[float]] = []
-            kept: list[dict[str, Any]] = []
-            for c in batch:
-                try:
-                    embeddings.append(embed([c["text"]])[0])
-                    kept.append(c)
-                except (urllib.error.URLError, TimeoutError, KeyError) as ce:
-                    print(f"    Skipped chunk ({type(ce).__name__}): {c['file']}#{c['chunk_index']} ({len(c['text'])} chars) {_err_detail(ce)}")
-                    if not (isinstance(ce, urllib.error.HTTPError) and ce.code < 500):
-                        with lock:
-                            incomplete_files.add(c["file"])
-            return kept, embeddings
-
-    def process_batch(batch: list[dict[str, Any]]) -> None:
+    def process_document(document: tuple[str, list[dict[str, Any]]]) -> None:
         nonlocal done
-        batch, embeddings = embed_with_salvage(batch)
+        rel_path, chunks = document
+        embeddings: list[list[float]] = []
+        for start in range(0, len(chunks), BATCH_SIZE):
+            batch = chunks[start : start + BATCH_SIZE]
+            try:
+                vectors = embed([c["text"] for c in batch])
+                if len(vectors) != len(batch) or any(len(v) != dim for v in vectors):
+                    raise ValueError("Embedding response count or dimension does not match the document batch")
+            except (urllib.error.URLError, TimeoutError, KeyError, ValueError):
+                logger.exception(
+                    "Document embedding failed",
+                    extra={"operation": "embed", "collection": collection, "file": rel_path, "batch_start": start},
+                )
+                raise
+            embeddings.extend(vectors)
         points = [
             PointStruct(
                 id=point_id(c["file"], c["chunk_index"]),
@@ -526,12 +498,15 @@ def load_collection(
                     **({"doc_kind": c["doc_kind"]} if c["doc_kind"] else {}),
                 },
             )
-            for c, emb in zip(batch, embeddings)
+            for c, emb in zip(chunks, embeddings, strict=True)
         ]
-        if points:
-            _qdrant_call("upsert", client.upsert, collection, points)
+        for start in range(0, len(points), BATCH_SIZE):
+            _qdrant_call("upsert", client.upsert, collection, points[start : start + BATCH_SIZE], wait=True)
+        stale_ids = set(indexed.get(rel_path, {})) - {p.id for p in points}
+        if stale_ids:
+            _qdrant_call("delete", client.delete, collection, points_selector=list(stale_ids), wait=True)
         with lock:
-            done += len(batch)
+            done += len(chunks)
             elapsed = time.time() - t0
             rate = done / elapsed if elapsed > 0 else 0
             eta = (total - done) / rate if rate > 0 else 0
@@ -541,22 +516,11 @@ def load_collection(
         with ThreadPoolExecutor(max_workers=workers) as pool:
             # iterating re-raises whatever a worker raised, so a hard failure
             # still aborts the run instead of being swallowed
-            for _ in pool.map(process_batch, batches):
+            for _ in pool.map(process_document, documents):
                 pass
     else:
-        for batch in batches:
-            process_batch(batch)
-
-    # Remove partially loaded files so next run retries them
-    if incomplete_files:
-        print(f"\nRemoving {len(incomplete_files)} incomplete files for retry on next run:")
-        for f in incomplete_files:
-            print(f"  {f}")
-            _qdrant_call(
-                "delete", client.delete,
-                collection,
-                points_selector=Filter(must=[FieldCondition(key="file", match=MatchValue(value=f))]),
-            )
+        for document in documents:
+            process_document(document)
 
     elapsed = time.time() - t0
     info = _qdrant_call("get_collection", client.get_collection, collection)
@@ -593,6 +557,8 @@ def main(argv: list[str] | None = None):
         parser.error("--rebuild requires --yes-really-rebuild")
     if args.yes_really_rebuild and not args.rebuild:
         parser.error("--yes-really-rebuild is only valid with --rebuild")
+    if args.rebuild and args.source:
+        parser.error("--rebuild cannot be combined with --source: it would drop other sources")
 
     config = load_profile(args.config_dir)  # also loads .env next to it
     collections = load_collections(config)
@@ -621,24 +587,12 @@ def main(argv: list[str] | None = None):
             f"Embedding preflight failed (url={embed_url}, model={embed_model}): {e}"
         )
 
-    # Prefer an existing target collection's vector size when creating the rest,
-    # and fail fast if the configured model no longer matches it.
-    dim = None
+    # Validate every target before mutating any collection.
+    dim = probe_dim
     for collection in targets:
-        if _qdrant_call("collection_exists", client.collection_exists, collection):
+        if not args.rebuild and _qdrant_call("collection_exists", client.collection_exists, collection):
             info = _qdrant_call("get_collection", client.get_collection, collection)
-            vectors = info.config.params.vectors
-            if isinstance(vectors, VectorParams):  # single unnamed vector, as we create them
-                dim = vectors.size
-                break
-    if dim is None:
-        dim = probe_dim
-    elif dim != probe_dim:
-        raise RuntimeError(
-            f"Embedding dimension mismatch: existing collection has {dim}, model "
-            f"{embed_model!r} at {embed_url} returns {probe_dim}. Fix EMBED_URL/"
-            "EMBED_MODEL or --rebuild the collections with the new model."
-        )
+            validate_index(info.config, embed_model, dim)
     print(f"Embedding dimension: {dim}")
 
     total_unmapped = 0

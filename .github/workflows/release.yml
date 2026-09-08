@@ -1,0 +1,48 @@
+name: Promote tested core release
+
+on:
+  workflow_dispatch:
+    inputs:
+      core_url:
+        description: HTTPS URL of the tested core archive
+        required: true
+      sha256:
+        description: SHA-256 recorded when the candidate was tested
+        required: true
+      tag:
+        description: Existing vVERSION tag pointing to the tested commit
+        required: true
+
+jobs:
+  draft:
+    if: github.server_url == 'https://github.com'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Download tested archive
+        env:
+          CORE_URL: ${{ inputs.core_url }}
+          CORE_USER: ${{ vars.CORE_BUNDLE_USER }}
+          CORE_TOKEN: ${{ secrets.CORE_BUNDLE_READ_TOKEN }}
+        run: |
+          set -eu
+          test -n "$CORE_USER"
+          test -n "$CORE_TOKEN"
+          curl --fail --silent --show-error --proto '=https' --tlsv1.2 --user "$CORE_USER:$CORE_TOKEN" --output /tmp/core.tar.gz "$CORE_URL"
+      - name: Verify archive and tag
+        env:
+          CORE_SHA256: ${{ inputs.sha256 }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          python3 tools/prepare-release.py --archive /tmp/core.tar.gz --sha256 "$CORE_SHA256" --tag "$RELEASE_TAG" --output /tmp/promotion
+      - name: Create draft with the original tested archive
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          gh release create "$RELEASE_TAG" --verify-tag --draft --title "$RELEASE_TAG" --notes-file docs/release-notes-0.2.0rc1.md /tmp/promotion/core.tar.gz /tmp/promotion/core.tar.gz.sha256 /tmp/promotion/release.json

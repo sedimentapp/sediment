@@ -3,7 +3,6 @@
 import argparse
 import json
 import os
-import re
 import urllib.parse
 from collections.abc import Mapping
 from datetime import datetime
@@ -12,12 +11,9 @@ from typing import Any
 
 from knowledge_schema import make_space
 
-from sediment._common import HttpError, http_get, safe_path_component, sanitize
+from sediment._common import http_get, safe_path_component, sanitize
 from sediment.sources import FetchWindow, Source, SpaceDerivationError
 
-# YouTrack returns this error per unknown project short-id inside `error_children`.
-# Whole batch query is rejected if any single project is invalid → we strip them and retry.
-_INVALID_PROJECT_RE = re.compile(r'The value "([^"]+)" isn\'t used for the project field')
 
 
 def fetch_youtrack_issues(profile: dict[str, Any], since_date: str, until_date: str,
@@ -52,25 +48,10 @@ def fetch_youtrack_issues(profile: dict[str, Any], since_date: str, until_date: 
         while True:
             params = urllib.parse.urlencode({"query": query, "fields": fields, "$top": page_size, "$skip": skip})
             url = f"{base_url}/api/issues?{params}"
-            try:
-                page = json.loads(http_get(url, headers={
-                    "Authorization": f"Bearer {token}",
-                    "Accept": "application/json",
-                }))
-            except HttpError as e:
-                if e.code == 400 and skip == 0 and enabled:
-                    bad = _INVALID_PROJECT_RE.findall(e.body.decode("utf-8", errors="replace"))
-                    bad_in_filter = [p for p in bad if p in enabled]
-                    if bad_in_filter:
-                        kept = [p for p in enabled if p not in bad_in_filter]
-                        print(f"  WARNING: YouTrack rejected projects {bad_in_filter}, dropping and retrying with {len(kept)} remaining")
-                        if not kept:
-                            print("  WARNING: no projects left after filtering, skipping issues fetch")
-                            break
-                        enabled = kept
-                        query = build_query(enabled)
-                        continue
-                raise
+            page = json.loads(http_get(url, headers={
+                "Authorization": f"Bearer {token}",
+                "Accept": "application/json",
+            }))
             issues.extend(page)
             if len(page) < page_size:
                 break

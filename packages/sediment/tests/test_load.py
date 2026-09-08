@@ -1,6 +1,8 @@
 """load_collection against a local in-memory Qdrant: space stamping and fail-closed paths."""
 
 from pathlib import Path
+from email.message import Message
+import urllib.error
 
 import pytest
 from qdrant_client import QdrantClient
@@ -35,6 +37,7 @@ def spaces():
 
 @pytest.fixture(autouse=True)
 def fake_embed(monkeypatch):
+    monkeypatch.setenv("EMBED_MODEL", "test-model")
     monkeypatch.setattr(ql, "embed", lambda texts: [[0.1] * DIM for _ in texts])
 
 
@@ -120,6 +123,111 @@ def test_changed_file_replaces_points(tmp_path, client, spaces):
     assert points[0]["content_hash"] != old_hash
 
 
+def long_document(label: str) -> str:
+    return "# ACME-1\n\n" + "\n\n".join(f"{label} paragraph {i}: " + "content " * 75 for i in range(90))
+
+
+@pytest.mark.parametrize("workers", [1, 3])
+def test_interrupted_upsert_is_repaired_on_next_run(tmp_path, client, spaces, monkeypatch, workers):
+    rel = "youtrack/ACME-1.md"
+    text = long_document("Original")
+    write(tmp_path, rel, text)
+    original_upsert = client.upsert
+    calls = 0
+
+    def interrupted_upsert(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise InterruptedError("interrupted after first batch")
+        return original_upsert(*args, **kwargs)
+
+    monkeypatch.setattr(client, "upsert", interrupted_upsert)
+    with pytest.raises(InterruptedError):
+        ql.load_collection("acme", ["youtrack"], tmp_path, client, DIM, False, spaces, workers)
+    assert len(points_by_file(client, rel)) == 64
+
+    monkeypatch.setattr(client, "upsert", original_upsert)
+    load(client, tmp_path, spaces)
+    expected = ql.chunk_text(text, "youtrack", rel)
+    points = sorted(points_by_file(client, rel), key=lambda p: p["chunk_index"])
+    assert len(points) == len(expected) == 90
+    assert [p["text"] for p in points] == [c["text"] for c in expected]
+
+    def unexpected_embed(texts):
+        pytest.fail("completed document must not be embedded again")
+
+    monkeypatch.setattr(ql, "embed", unexpected_embed)
+    load(client, tmp_path, spaces)
+    assert len(points_by_file(client, rel)) == 90
+
+
+@pytest.mark.parametrize("failure", [TimeoutError("offline"), urllib.error.HTTPError("http://embed.invalid", 400, "bad input", Message(), None)])
+def test_embedding_failure_preserves_previous_document(tmp_path, client, spaces, monkeypatch, failure):
+    rel = "youtrack/ACME-1.md"
+    write(tmp_path, rel, f"# ACME-1\n\n{LONG}")
+    load(client, tmp_path, spaces)
+    previous = points_by_file(client, rel)
+    write(tmp_path, rel, long_document("Updated"))
+    calls = 0
+
+    def failing_embed(texts):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise failure
+        return [[0.1] * DIM for _ in texts]
+
+    monkeypatch.setattr(ql, "embed", failing_embed)
+    with pytest.raises(type(failure)):
+        load(client, tmp_path, spaces)
+    assert calls == 2
+    assert points_by_file(client, rel) == previous
+
+
+@pytest.mark.parametrize("vectors", [[], [[0.1] * (DIM - 1)]])
+def test_malformed_embeddings_preserve_previous_document(tmp_path, client, spaces, monkeypatch, vectors):
+    rel = "youtrack/ACME-1.md"
+    write(tmp_path, rel, f"# ACME-1\n\n{LONG}")
+    load(client, tmp_path, spaces)
+    previous = points_by_file(client, rel)
+    write(tmp_path, rel, f"# ACME-1\n\n{LONG} Updated.")
+    monkeypatch.setattr(ql, "embed", lambda texts: vectors)
+    with pytest.raises(ValueError, match="count or dimension"):
+        load(client, tmp_path, spaces)
+    assert points_by_file(client, rel) == previous
+
+
+def test_shorter_document_cleanup_recovers_after_interruption(tmp_path, client, spaces, monkeypatch):
+    rel = "youtrack/ACME-1.md"
+    write(tmp_path, rel, long_document("Original"))
+    load(client, tmp_path, spaces)
+    write(tmp_path, rel, f"# ACME-1\n\n{LONG}")
+    original_delete = client.delete
+
+    def interrupted_delete(*args, **kwargs):
+        raise InterruptedError("interrupted before cleanup")
+
+    monkeypatch.setattr(client, "delete", interrupted_delete)
+    with pytest.raises(InterruptedError):
+        load(client, tmp_path, spaces)
+    assert len(points_by_file(client, rel)) == 90
+    monkeypatch.setattr(client, "delete", original_delete)
+    load(client, tmp_path, spaces)
+    points = points_by_file(client, rel)
+    assert len(points) == 1
+    assert points[0]["content_hash"] == ql.content_hash(f"# ACME-1\n\n{LONG}")
+
+
+def test_document_becoming_empty_removes_old_points(tmp_path, client, spaces):
+    rel = "youtrack/ACME-1.md"
+    write(tmp_path, rel, f"# ACME-1\n\n{LONG}")
+    load(client, tmp_path, spaces)
+    write(tmp_path, rel, "")
+    load(client, tmp_path, spaces)
+    assert points_by_file(client, rel) == []
+
+
 def test_unmapped_file_skipped_and_reported(tmp_path, client, spaces):
     write(tmp_path, "mattermost/renamed-chan/root9.md", f"# t\n\n{LONG}")
 
@@ -184,13 +292,14 @@ def test_config_dir_env_is_loaded_before_endpoint_resolution(tmp_path, monkeypat
     (tmp_path / ".env").write_text(
         "QDRANT_URL=http://qdrant.from-config:6333\n"
         "EMBED_URL=http://embed.from-config:8080\n"
+        "EMBED_MODEL=test-model\n"
     )
 
     (tmp_path / "_profile.yaml").write_text("collections:\n  acme:\n    sources: [claude]\n")
     ql.load_profile(str(tmp_path))
 
     assert ql.require_qdrant_url() == "http://qdrant.from-config:6333"
-    assert ql.embedding_config() == ("http://embed.from-config:8080", "bge-m3")
+    assert ql.embedding_config() == ("http://embed.from-config:8080", "test-model")
 
 
 def test_rebuild_requires_explicit_confirmation(capsys, tmp_path):

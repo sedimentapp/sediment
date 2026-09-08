@@ -27,7 +27,9 @@ Collections are declared per deployment in the loader profile.
 """
 
 import json
+import logging
 import urllib.request
+from typing import Any
 
 SOURCES: list[str] = ["youtrack", "mattermost", "claude", "telegram"]
 
@@ -73,6 +75,37 @@ DOC_KINDS: tuple[str, ...] = (
 # back out when it stitches a document from its chunks.
 CHUNK_SIZE: int = 800
 CHUNK_OVERLAP: int = 100
+INDEX_SCHEMA_VERSION = 1
+CHUNKING_VERSION = 1
+
+
+def index_contract(model: str, dimension: int) -> dict[str, Any]:
+    if not model or not model.strip() or dimension <= 0:
+        raise ValueError("Index contract requires an explicit model identity and positive dimension")
+    return {
+        "schema_version": INDEX_SCHEMA_VERSION,
+        "embedding_model": model,
+        "dimension": dimension,
+        "chunking_version": CHUNKING_VERSION,
+        "chunk_size": CHUNK_SIZE,
+        "chunk_overlap": CHUNK_OVERLAP,
+    }
+
+
+def validate_index(config: Any, model: str, dimension: int | None = None) -> None:
+    vectors = config.params.vectors
+    if not hasattr(vectors, "size") or vectors.distance != "Cosine":
+        raise ValueError("Index requires a single unnamed cosine vector")
+    expected = index_contract(model, vectors.size if dimension is None else dimension)
+    metadata = config.metadata
+    if not isinstance(metadata, dict) or metadata.get("sediment") != expected or vectors.size != expected["dimension"]:
+        logging.getLogger(__name__).error(
+            "Index contract mismatch", extra={"operation": "validate_index", "expected_contract": expected, "actual_metadata": metadata},
+        )
+        raise ValueError(
+            f"Incompatible or unversioned index: expected {expected!r}, metadata={metadata!r}. "
+            "Build a new collection from complete source data; do not relabel existing vectors."
+        )
 
 
 def make_space(kind: str, key: str) -> str:

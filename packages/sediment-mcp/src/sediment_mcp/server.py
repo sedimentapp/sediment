@@ -41,6 +41,7 @@ from starlette.requests import Request
 from starlette.responses import PlainTextResponse
 
 from sediment_mcp.acl import load_acl
+from knowledge_schema import validate_index
 from sediment_mcp.auth import build_auth_provider, current_principal
 from sediment_mcp.extensions import load_extensions
 from sediment_mcp.limits import (
@@ -338,12 +339,15 @@ def search(
 
     try:
         if query:
+            validate_index(client.get_collection(collection).config, EMBED_MODEL)
             vector = embed([query], EMBED_URL, EMBED_MODEL, timeout=30, api_key=EMBED_API_KEY)[0]
+            validate_index(client.get_collection(collection).config, EMBED_MODEL, len(vector))
             results = client.query_points(
                 collection, query=vector, query_filter=qfilter, limit=limit
             )
             items = [_format_result(r) for r in results.points]
         else:
+            validate_index(client.get_collection(collection).config, EMBED_MODEL)
             # Newest first only when a date range is set: order_by drops points
             # that lack the key, and pre-ts entries must stay findable by keyword.
             order_by = OrderBy(key="ts", direction=Direction.DESC) if ts_range else None
@@ -450,6 +454,7 @@ def get_document(collection: str, file: str, from_chunk: int = 0) -> str:
         window.append(IsEmptyCondition(is_empty=PayloadField(key="chunk_index")))
 
     try:
+        validate_index(client.get_collection(collection).config, EMBED_MODEL)
         total = client.count(
             collection, count_filter=Filter(must=conditions), exact=True
         ).count
@@ -556,10 +561,12 @@ def add_knowledge(
     if visibility == "org" and grant is not None and collection not in grant.unrestricted_write_collections:
         return "visibility='org' requires unrestricted write access to the collection."
 
-    vector = embed([text], EMBED_URL, EMBED_MODEL, timeout=30, api_key=EMBED_API_KEY)[0]
     payload = _manual_payload(principal, text, file, title, visibility)
 
     try:
+        validate_index(client.get_collection(collection).config, EMBED_MODEL)
+        vector = embed([text], EMBED_URL, EMBED_MODEL, timeout=30, api_key=EMBED_API_KEY)[0]
+        validate_index(client.get_collection(collection).config, EMBED_MODEL, len(vector))
         client.upsert(
             collection,
             points=[
