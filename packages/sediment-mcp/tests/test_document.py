@@ -1,3 +1,4 @@
+from sediment_mcp.access import FileAccess
 from knowledge_schema import CHUNK_OVERLAP
 
 from sediment_mcp import server
@@ -108,7 +109,7 @@ def test_acl_hides_a_document_outside_the_granted_spaces(upsert, monkeypatch):
             ]
         }
     )
-    monkeypatch.setattr(server, "ACL", acl)
+    monkeypatch.setattr(server, "ACCESS", FileAccess(acl))
     monkeypatch.setattr(server, "current_principal", lambda: "carol")
     upsert(
         [
@@ -120,3 +121,20 @@ def test_acl_hides_a_document_outside_the_granted_spaces(upsert, monkeypatch):
     assert get_document("acme", "mm/ours.md").endswith("ours")
     assert "No document" in get_document("acme", "mm/theirs.md")
     assert "not accessible" in get_document("globex", "mm/ours.md")
+
+
+def test_other_collection_wildcard_does_not_bypass_document_or_search_filter(upsert, monkeypatch):
+    acl = Acl({"grants": [
+        {"users": ["carol"], "collections": ["globex"], "spaces": ["*"], "unrestricted": True},
+        {"users": ["carol"], "collections": ["acme"], "spaces": ["mm:visible"]},
+    ]})
+    monkeypatch.setattr(server, "ACCESS", FileAccess(acl))
+    monkeypatch.setattr(server, "current_principal", lambda: "carol")
+    upsert([
+        {"text": "visible needle", "source": "mattermost", "file": "mm/ours.md", "space": "mm:visible", "chunk_index": 0},
+        {"text": "private needle", "source": "mattermost", "file": "mm/theirs.md", "space": "mm:other", "chunk_index": 0},
+    ])
+    assert "No document" in get_document("acme", "mm/theirs.md")
+    found = server.search("acme", keywords=['"needle"'])
+    assert "visible needle" in found
+    assert "private needle" not in found

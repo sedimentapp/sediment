@@ -12,6 +12,7 @@ members = [
     "knowledge-schema",
     "sediment",
     "sediment-mcp",
+    "sediment-mcp-ee-access",
     "sediment-mcp-ee-auth",
     "sediment-mcp-ee-license",
     "sediment-mcp-ee-webadmin",
@@ -2075,12 +2076,30 @@ requires-dist = [
 test = [{ name = "pytest", specifier = ">=8" }]
 
 [[package]]
+name = "sediment-mcp-ee-access"
+version = "0.1.0"
+source = { editable = "ee/access" }
+dependencies = [
+    { name = "pyyaml" },
+    { name = "sediment-mcp" },
+    { name = "sediment-mcp-ee-license" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "pyyaml" },
+    { name = "sediment-mcp", editable = "packages/sediment-mcp" },
+    { name = "sediment-mcp-ee-license", editable = "ee/license" },
+]
+
+[[package]]
 name = "sediment-mcp-ee-auth"
 version = "0.1.0"
 source = { editable = "ee/auth" }
 dependencies = [
     { name = "fastmcp" },
     { name = "sediment-mcp" },
+    { name = "sediment-mcp-ee-access" },
     { name = "sediment-mcp-ee-license" },
 ]
 
@@ -2088,6 +2107,7 @@ dependencies = [
 requires-dist = [
     { name = "fastmcp", specifier = ">=3,<4" },
     { name = "sediment-mcp", editable = "packages/sediment-mcp" },
+    { name = "sediment-mcp-ee-access", editable = "ee/access" },
     { name = "sediment-mcp-ee-license", editable = "ee/license" },
 ]
 
@@ -2126,6 +2146,7 @@ dependencies = [
     { name = "jinja2" },
     { name = "qdrant-client" },
     { name = "sediment-mcp" },
+    { name = "sediment-mcp-ee-access" },
     { name = "sediment-mcp-ee-license" },
 ]
 
@@ -2141,6 +2162,7 @@ requires-dist = [
     { name = "jinja2", specifier = ">=3" },
     { name = "qdrant-client" },
     { name = "sediment-mcp", editable = "packages/sediment-mcp" },
+    { name = "sediment-mcp-ee-access", editable = "ee/access" },
     { name = "sediment-mcp-ee-license", editable = "ee/license" },
 ]
 

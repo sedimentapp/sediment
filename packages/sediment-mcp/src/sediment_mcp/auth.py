@@ -97,6 +97,10 @@ class StaticTokenVerifier(TokenVerifier):
     async def verify_token(self, token: str) -> AccessToken | None:
         for known, principal in self._tokens.items():
             if hmac.compare_digest(token, known):
+                if os.environ.get("MCP_ACCESS_MODE", "file") == "database":
+                    from sediment_mcp.server import ACCESS
+                    if not ACCESS.snapshot().is_active(principal):
+                        return None
                 return AccessToken(token=token, client_id=principal, scopes=[])
         return None
 

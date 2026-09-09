@@ -40,7 +40,7 @@ from qdrant_client.models import (
 from starlette.requests import Request
 from starlette.responses import PlainTextResponse
 
-from sediment_mcp.acl import load_acl
+from sediment_mcp.access import load_access
 from knowledge_schema import validate_index
 from sediment_mcp.auth import build_auth_provider, current_principal
 from sediment_mcp.extensions import load_extensions
@@ -78,9 +78,8 @@ mcp = FastMCP("qdrant-knowledge", mask_error_details=True)
 client = QdrantClient(url=QDRANT_URL, api_key=os.environ.get("QDRANT_API_KEY"))
 logger = get_logger(__name__)
 
-# Loaded once at startup; a broken config is a fatal import error — the server
-# must never come up half-protected. None = ACL disabled (allow-all).
-ACL = load_acl()
+# The source is fixed at startup; each tool reads one current access snapshot.
+ACCESS = load_access()
 
 SEARCH_SOURCES = [*SOURCES, "manual"]
 _COLLECTION_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
@@ -324,8 +323,9 @@ def search(
         return f"Unknown source {source!r}. Allowed: {', '.join(SEARCH_SOURCES)}."
 
     acl_condition = None
-    if ACL is not None:
-        grant = ACL.resolve(current_principal())
+    snapshot = ACCESS.snapshot()
+    grant = snapshot.resolve(current_principal(), collection) if snapshot.acl is not None else None
+    if grant is not None:
         if collection not in grant.collections:
             # same message as for a nonexistent collection — no enumeration oracle
             return f"Collection {collection!r} is not accessible."
@@ -439,8 +439,9 @@ def get_document(collection: str, file: str, from_chunk: int = 0) -> str:
         return f"from_chunk must be between 0 and {MAX_CHUNK_INDEX}."
 
     acl_condition = None
-    if ACL is not None:
-        grant = ACL.resolve(current_principal())
+    snapshot = ACCESS.snapshot()
+    grant = snapshot.resolve(current_principal(), collection) if snapshot.acl is not None else None
+    if grant is not None:
         if collection not in grant.collections:
             return f"Collection {collection!r} is not accessible."
         acl_condition = grant.space_condition()
@@ -559,9 +560,8 @@ def add_knowledge(
         return f"Unknown visibility {visibility!r}. Allowed: {', '.join(VISIBILITY_VALUES)}."
 
     principal = current_principal()
-    grant = None
-    if ACL is not None:
-        grant = ACL.resolve(principal)
+    grant = ACCESS.snapshot().resolve(principal, collection)
+    if grant is not None:
         if collection not in grant.write_collections:
             return f"No write access to collection {collection!r}."
     if visibility == "org" and grant is not None and collection not in grant.unrestricted_write_collections:

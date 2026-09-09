@@ -42,6 +42,7 @@ stamped visibility=org.
 
 import os
 import re
+import copy
 from dataclasses import dataclass
 
 import yaml
@@ -115,8 +116,9 @@ def _space_format_msg(space: str) -> str:
 
 
 class Acl:
-    def __init__(self, config: dict) -> None:
+    def __init__(self, config: dict, *, allow_empty: bool = False) -> None:
         _require(isinstance(config, dict), "<root>", "must be a mapping")
+        self.config = copy.deepcopy(config)
         unknown_top = set(config) - _TOP_KEYS
         _require(not unknown_top, "<root>", f"unknown keys: {sorted(unknown_top)}")
 
@@ -141,7 +143,7 @@ class Acl:
             self._space_groups[name] = frozenset(values)
 
         grants = config.get("grants")
-        if not isinstance(grants, list) or not grants:
+        if not isinstance(grants, list) or (not grants and not allow_empty):
             raise AclConfigError("grants: must be a non-empty list")
         self._grants: list[dict] = []
         for i, grant in enumerate(grants):
@@ -215,8 +217,12 @@ class Acl:
             principal in self._user_groups[g] for g in grant["user_groups"]
         )
 
-    def resolve(self, principal: str) -> Grant:
-        """Union of all grants reaching the principal; unknown principal -> deny all."""
+    def resolve(self, principal: str, collection: str | None = None) -> Grant:
+        """Resolve within a collection; unknown principal -> deny all.
+
+        Omitting collection retains the legacy union for migration comparison.
+        Enforcement must use AccessSnapshot.resolve, which requires a collection.
+        """
         principal = principal.lower()
         collections: set[str] = set()
         spaces: set[str] | None = set()
@@ -225,6 +231,8 @@ class Acl:
         matched = False
 
         for grant in self._grants:
+            if collection is not None and collection not in grant["collections"]:
+                continue
             if not self._covers(grant, principal):
                 continue
             matched = True

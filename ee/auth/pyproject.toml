@@ -8,6 +8,7 @@ dependencies = [
     "fastmcp>=3,<4",
     "sediment-mcp",
     "sediment-mcp-ee-license",
+    "sediment-mcp-ee-access",
 ]
 
 [project.entry-points."sediment_mcp.auth_providers"]

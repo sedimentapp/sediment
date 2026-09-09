@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+{% block title %}People and permissions — sediment{% endblock %}
+{% macro guard() -%}
+<input type="hidden" name="csrf" value="{{ csrf }}">
+<input type="hidden" name="revision" value="{{ draft.revision }}">
+<input type="hidden" name="base_version" value="{{ draft.base_version }}">
+{%- endmacro %}
+{% macro grant_form(g, index='') -%}
+<form method="post" action="/admin/acl/draft" class="access-form">
+{{ guard() }}<input type="hidden" name="index" value="{{ index }}">
+<label>Collections <input type="text" name="collection" value="{{ g.get('collections', [])|join(', ') }}" required></label>
+<label>Users <input type="text" name="users" value="{{ g.get('users', [])|join(', ') }}" list="principals"></label>
+<label>User groups <input type="text" name="user_groups" value="{{ g.get('user_groups', [])|join(', ') }}"></label>
+<label>Space groups <input type="text" name="space_groups" value="{{ g.get('space_groups', [])|join(', ') }}"></label>
+<label>Spaces <input type="text" name="spaces" value="{{ g.get('spaces', [])|join(', ') }}" placeholder="yt:PROJECT, mm:channel-id"></label>
+<p class="muted">Comma-separated stable IDs. Browse <a href="/admin">collections and space names</a> to find them.</p>
+<label class="check"><input type="checkbox" name="write" {% if g.get('write') %}checked{% endif %}> Allow adding knowledge</label>
+<label class="check"><input type="checkbox" name="unrestricted" {% if g.get('unrestricted') %}checked{% endif %}> Confirm full access when Spaces contains * (includes private spaces)</label>
+<div class="access-actions"><button name="operation" value="grant_save">Save grant to draft</button>
+{% if index != '' %}<button class="secondary" name="operation" value="grant_delete" formnovalidate>Remove from draft</button>{% endif %}</div>
+</form>
+{%- endmacro %}
+{% block content %}
+<header class="access-heading"><div><h1>People and permissions</h1><p class="muted">Live version {{ current.version }}. All forms below edit the shared draft.</p></div>
+<a href="/admin/acl/history">Version history</a></header>
+<div class="draft-bar"><div><strong>{% if dirty %}Unapplied changes{% else %}Draft matches the live version{% endif %}</strong>
+<p>Saved changes do not affect access until you review and apply them.</p></div><a class="action-link" href="/admin/acl/preview">Review changes</a></div>
+{% if current.version == 1 and not current.document.users %}<div class="warn"><strong>Initial setup</strong><p>No MCP user has access to data. Connect users and create grants, then review and apply the draft.</p></div>{% endif %}
+{% if error %}<div class="warn" role="alert"><strong>Not saved</strong><p>{{ error }}</p></div>{% endif %}
+{% if submitted %}<details open><summary>Your submitted values</summary><pre class="yaml-view">{{ submitted|tojson(indent=2) }}</pre></details>{% endif %}
+<nav class="access-sections" aria-label="Permission editor"><a href="#people">People</a><a href="#groups">Groups</a><a href="#spaces">Space groups</a><a href="#grants">Grants</a><a href="#transfer">Import / export</a></nav>
+
+<section id="people"><h2>People</h2><p>Stable principals keep ownership of existing notes. Disable an account to stop future MCP calls.</p>
+<datalist id="principals">{% for u in draft.document.users %}<option value="{{ u.principal }}">{% endfor %}</datalist>
+<div class="table-scroll"><table><tr><th>Principal</th><th>GitHub identity</th><th>Draft status</th><th>Change</th></tr>
+{% for u in draft.document.users %}<tr><td><a href="/admin/access?principal={{ u.principal }}">{{ u.principal }}</a></td>
+<td>{% if u.github_id %}{% if u.github_login %}<a href="https://github.com/{{ u.github_login }}" rel="noreferrer">{{ u.github_login }}</a>{% endif %} <span class="muted">GitHub ID {{ u.github_id }}</span>{% else %}Static token{% endif %}</td>
+<td>{{ 'Enabled' if u.enabled else 'Disabled' }}</td><td><form method="post" action="/admin/acl/draft">{{ guard() }}<input type="hidden" name="principal" value="{{ u.principal }}"><button class="secondary" name="operation" value="user_toggle">{{ 'Disable' if u.enabled else 'Enable' }} in draft</button></form></td></tr>
+{% else %}<tr><td colspan="4">No users yet. Connect a GitHub account or register a static-token principal below.</td></tr>{% endfor %}</table></div>
+<details {% if profile %}open{% endif %}><summary>Connect a GitHub account</summary>
+<form method="post" action="/admin/acl/github" class="access-form">{{ guard() }}<label>GitHub login <input type="text" name="github_login" required></label><button>Look up profile</button></form>
+{% if profile %}<div class="profile-confirm"><p>Confirm <a href="https://github.com/{{ profile.github_login }}" rel="noreferrer">{{ profile.github_login }}</a>, GitHub ID <strong>{{ profile.github_id }}</strong>.</p>
+<form method="post" action="/admin/acl/draft" class="access-form">{{ guard() }}<input type="hidden" name="github_login" value="{{ profile.github_login }}"><input type="hidden" name="github_id" value="{{ profile.github_id }}"><label>Stable principal <input type="text" name="principal" value="{{ profile.github_login|lower }}" required></label><button name="operation" value="user_add">Add confirmed account to draft</button></form></div>{% endif %}</details>
+<details><summary>Register a static-token principal</summary><p class="muted">The token itself is configured by the operator. Do not paste it here.</p><form method="post" action="/admin/acl/draft" class="access-form">{{ guard() }}<label>Principal <input type="text" name="principal" required></label><button name="operation" value="user_add">Add principal to draft</button></form></details></section>
+
+{% for kind, heading, ident, op in [('user_groups', 'User groups', 'groups', 'group'), ('space_groups', 'Space groups', 'spaces', 'space_group')] %}
+<section id="{{ ident }}"><h2>{{ heading }}</h2>
+{% for name, members in draft.document.policy.get(kind, {}).items() %}<details><summary>{{ name }} <span class="muted">({{ members|length }})</span></summary><form method="post" action="/admin/acl/draft" class="access-form">{{ guard() }}<input type="hidden" name="name" value="{{ name }}"><label>{{ 'Principals' if kind == 'user_groups' else 'Space IDs' }} <input type="text" name="members" value="{{ members|join(', ') }}" required></label><div class="access-actions"><button name="operation" value="{{ op }}_save">Save group to draft</button><button class="secondary" name="operation" value="{{ op }}_delete" formnovalidate>Remove unused group</button></div></form></details>{% endfor %}
+<details><summary>Add {{ 'user' if kind == 'user_groups' else 'space' }} group</summary><form method="post" action="/admin/acl/draft" class="access-form">{{ guard() }}<label>Group name <input type="text" name="name" required></label><label>{{ 'Principals' if kind == 'user_groups' else 'Space IDs' }} <input type="text" name="members" required></label><p class="muted">Separate entries with commas. Spaces are scoped to the collections selected in each grant.</p><button name="operation" value="{{ op }}_save">Save group to draft</button></form></details></section>
+
+{% endfor %}
+<section id="grants"><h2>Grants</h2><p>Access is combined within each collection. A full-access grant never expands another collection.</p>
+{% for g in draft.document.policy.grants %}<details><summary>{{ g.collections|join(', ') }} <span class="muted">— {{ (g.get('users', []) + g.get('user_groups', []))|join(', ') }}</span></summary>{{ grant_form(g, loop.index0) }}</details>{% endfor %}
+<details><summary>Add a grant</summary>{{ grant_form({}) }}</details></section>
+
+<section id="transfer"><h2>Import and export</h2><p><a href="/admin/acl/export">Download the live users and permissions</a>. Exports contain no tokens or OAuth secrets.</p>
+<details><summary>Import an access document into the draft</summary><form method="post" action="/admin/acl/import" class="access-form">{{ guard() }}<label>Exported access document <textarea name="document" rows="12" required></textarea></label><button>Import and review</button></form></details>
+{% if dirty %}<form method="post" action="/admin/acl/discard" class="access-actions">{{ guard() }}<button class="secondary">Discard draft changes</button></form>{% endif %}</section>
+{% endblock %}

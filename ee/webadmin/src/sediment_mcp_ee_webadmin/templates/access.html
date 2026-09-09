@@ -10,6 +10,7 @@ every authenticated principal can read and write every collection.</div>
 <h2>Principal → grant</h2>
 <form class="inline" method="get" action="/admin/access">
   <input type="text" name="principal" placeholder="github login / static token name" value="{{ principal_q }}">
+  <input type="text" name="collection" placeholder="Collection (optional)" value="{{ collection_q }}">
   <button>Resolve</button>
 </form>
 <p class="muted">Known principals:
@@ -20,16 +21,15 @@ every authenticated principal can read and write every collection.</div>
   <div class="warn"><code>{{ principal_q }}</code> matches no grant — deny-by-default, no access at all.</div>
   {% else %}
   <table>
-    <tr><th>Read collections</th><td>{% for c in grant.collections %}<span class="badge">{{ c }}</span>{% endfor %}</td></tr>
-    <tr><th>Write collections</th><td>{% for c in grant.write %}<span class="badge">{{ c }}</span>{% else %}<span class="muted">none</span>{% endfor %}</td></tr>
-    <tr><th>Spaces</th><td>
-      {% if grant.spaces is none %}
+    <tr><th>Collection</th><th>Adding knowledge</th><th>Spaces</th></tr>
+    {% for scoped in grant.per_collection %}<tr><td>{{ scoped.collection }}</td><td>{{ 'Allowed' if scoped.write else 'Not allowed' }}{% if scoped.org_write %}; may publish org-visible notes{% endif %}</td><td>
+      {% if scoped.spaces is none %}
         <strong>unrestricted (*)</strong> — every space, including DMs and personal ones
       {% else %}
-        {% for s in grant.spaces %}<code>{{ s }}</code>{% if not loop.last %}, {% endif %}{% endfor %}
+        {% for s in scoped.spaces %}<code>{{ s }}</code>{% if not loop.last %}, {% endif %}{% endfor %}
         <div class="muted">plus manual entries with <code>visibility=org</code></div>
       {% endif %}
-    </td></tr>
+    </td></tr>{% endfor %}
   </table>
   {% endif %}
 {% endif %}
@@ -37,6 +37,7 @@ every authenticated principal can read and write every collection.</div>
 <h2>Space → who sees it</h2>
 <form class="inline" method="get" action="/admin/access">
   <input type="text" name="space" placeholder="mm:&lt;channel_id&gt; / yt:INF / tg:&lt;chat_id&gt; / cc:&lt;project&gt; / manual:&lt;user&gt;" value="{{ space_q }}">
+  <input type="text" name="collection" placeholder="Collection (optional)" value="{{ collection_q }}">
   <button>Check</button>
 </form>
 {% if viewers is not none %}

@@ -108,6 +108,9 @@ uv run --package sediment sediment-load --config-dir . --collection <name> --sou
 MCP_ACL_DISABLE=1 uv run --package sediment-mcp sediment-mcp-serve   # explicit allow-all, for local dev only
 ```
 
+See [access control](docs/access-control.md) for Community YAML ACLs and Enterprise
+managed users, draft review, version history, and explicit database migration.
+
 Secrets and endpoints go into the `.env` next to `_profile.yaml` (which is
 pointed at via `--config-dir`). `QDRANT_URL` and `EMBED_URL` are mandatory; there
 are no production URLs by default. The optional `QDRANT_API_KEY` is used by all

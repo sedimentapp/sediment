@@ -13,6 +13,10 @@ is the same human and occupies one seat (the same convention
 sediment_mcp.auth uses for identity). More principals configured than the
 license allows is a fatal startup error.
 
+In managed-access mode the access provider checks active database users plus
+managing administrators at startup and before each activation; static credentials
+do not independently create users or consume seats for disabled accounts.
+
 Delivery: MCP_LICENSE (the token itself) or MCP_LICENSE_FILE (path to a
 file with the token); setting both is an error. Each ee entry point calls
 require_ee(<feature>) first thing, so enabling an ee feature without a
@@ -98,8 +102,10 @@ def verify_license(token: str) -> dict[str, Any]:
 
 def configured_principals() -> set[str]:
     """Distinct principals that can authenticate, for seat accounting."""
-    principals = set(static_token_map().values())
-    for env in _IDENTITY_ENVS:
+    managed = os.environ.get("MCP_ACCESS_MODE", "file") == "database"
+    # The access provider checks active database users after license verification.
+    principals = set() if managed else set(static_token_map().values())
+    for env in (("MCP_ADMIN_IDENTITIES",) if managed else _IDENTITY_ENVS):
         raw = os.environ.get(env, "")
         if raw:
             principals.update(parse_github_identities(raw, env).values())

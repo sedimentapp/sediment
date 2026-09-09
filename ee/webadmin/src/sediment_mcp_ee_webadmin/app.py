@@ -3,7 +3,7 @@
 Registered as "webadmin" in the sediment_mcp.extensions entry-point group
 (enabled via MCP_EXTENSIONS=webadmin). Reads the same module-level state
 sediment_mcp.server uses for the MCP tools: the shared QdrantClient and the
-ACL loaded at startup.
+access source. Managed access snapshots are read for each request.
 """
 
 import csv
@@ -127,34 +127,38 @@ def register(mcp: FastMCP) -> None:
         if who is None:
             return RedirectResponse(LOGIN_PATH, status_code=302)
 
-        acl = core.ACL
+        snapshot = await anyio.to_thread.run_sync(core.ACCESS.snapshot)
+        acl = snapshot.acl
         principal_q = request.query_params.get("principal", "").strip().lower()
         space_q = request.query_params.get("space", "").strip()
 
+        collection_q = request.query_params.get("collection", "").strip()
+        configured_collections = sorted({c for g in acl.config["grants"] for c in g["collections"]}) if acl is not None else []
+        selected_collections = [collection_q] if collection_q else configured_collections
         grant = None
         if acl is not None and principal_q:
-            resolved = acl.resolve(principal_q)
-            grant = {
-                "collections": sorted(resolved.collections),
-                "write": sorted(resolved.write_collections),
-                "spaces": None if resolved.spaces is None else sorted(resolved.spaces),
-            }
+            per_collection = []
+            for collection in selected_collections:
+                resolved = snapshot.resolve(principal_q, collection)
+                assert resolved is not None
+                if collection in resolved.collections:
+                    per_collection.append({"collection": collection, "write": collection in resolved.write_collections,
+                                           "org_write": collection in resolved.unrestricted_write_collections,
+                                           "spaces": None if resolved.spaces is None else sorted(resolved.spaces)})
+            grant = {"collections": [g["collection"] for g in per_collection], "per_collection": per_collection}
 
         viewers = None
         if acl is not None and space_q:
             viewers = []
             for p in sorted(acl.principals()):
-                g = acl.resolve(p)
-                if g.spaces is None:
-                    viewers.append(
-                        {"principal": p, "via": "unrestricted (*)",
-                         "collections": sorted(g.collections)}
-                    )
-                elif space_q in g.spaces:
-                    viewers.append(
-                        {"principal": p, "via": "explicit grant",
-                         "collections": sorted(g.collections)}
-                    )
+                for collection in selected_collections:
+                    g = snapshot.resolve(p, collection)
+                    assert g is not None
+                    if collection not in g.collections:
+                        continue
+                    if g.spaces is None or space_q in g.spaces:
+                        viewers.append({"principal": p, "via": "unrestricted (*)" if g.spaces is None else "explicit grant",
+                                        "collections": [collection]})
 
         return render(
             "access.html",
@@ -163,6 +167,7 @@ def register(mcp: FastMCP) -> None:
             acl_enabled=acl is not None,
             known_principals=sorted(acl.principals()) if acl is not None else [],
             principal_q=principal_q,
+            collection_q=collection_q,
             space_q=space_q,
             grant=grant,
             viewers=viewers,

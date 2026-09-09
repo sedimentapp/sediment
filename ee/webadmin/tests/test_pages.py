@@ -1,5 +1,7 @@
 """Page tests: real FastMCP app + register(), fake QdrantClient, real Acl."""
 
+from sediment_mcp.access import FileAccess
+
 from types import SimpleNamespace
 from typing import Any, cast
 
@@ -111,7 +113,7 @@ def client(monkeypatch):
     monkeypatch.setenv("MCP_ADMIN_AUTH", "dev")
     monkeypatch.setenv("MCP_ADMIN_DEV_PRINCIPAL", "alice")
     monkeypatch.setattr(core, "client", FakeQdrant())
-    monkeypatch.setattr(core, "ACL", Acl(ACL_CONFIG))
+    monkeypatch.setattr(core, "ACCESS", FileAccess(Acl(ACL_CONFIG)))
     mcp = FastMCP("test-admin")
     register(mcp)
     with TestClient(mcp.http_app()) as tc:
@@ -142,7 +144,7 @@ def test_spaces_without_ts_index(monkeypatch):
     monkeypatch.setenv("MCP_ADMIN_AUTH", "dev")
     monkeypatch.setenv("MCP_ADMIN_DEV_PRINCIPAL", "alice")
     monkeypatch.setattr(core, "client", FakeQdrant(ts_indexed=False))
-    monkeypatch.setattr(core, "ACL", Acl(ACL_CONFIG))
+    monkeypatch.setattr(core, "ACCESS", FileAccess(Acl(ACL_CONFIG)))
     mcp = FastMCP("test-admin")
     register(mcp)
     with TestClient(mcp.http_app()) as tc:
@@ -184,7 +186,7 @@ def test_access_acl_disabled(monkeypatch):
     monkeypatch.setenv("MCP_ADMIN_AUTH", "dev")
     monkeypatch.setenv("MCP_ADMIN_DEV_PRINCIPAL", "alice")
     monkeypatch.setattr(core, "client", FakeQdrant())
-    monkeypatch.setattr(core, "ACL", None)
+    monkeypatch.setattr(core, "ACCESS", FileAccess(None))
     mcp = FastMCP("test-admin")
     register(mcp)
     with TestClient(mcp.http_app()) as tc:
@@ -205,7 +207,7 @@ def github_client(monkeypatch):
     monkeypatch.setenv("GITHUB_OAUTH_CLIENT_ID", "cid")
     monkeypatch.setenv("GITHUB_OAUTH_CLIENT_SECRET", "csec")
     monkeypatch.setattr(core, "client", FakeQdrant())
-    monkeypatch.setattr(core, "ACL", Acl(ACL_CONFIG))
+    monkeypatch.setattr(core, "ACCESS", FileAccess(Acl(ACL_CONFIG)))
     mcp = FastMCP("test-admin")
     register(mcp)
     with TestClient(mcp.http_app()) as tc:
@@ -283,7 +285,7 @@ def test_audit_page_lists_events(monkeypatch, tmp_path):
     monkeypatch.setenv("MCP_ADMIN_AUTH", "dev")
     monkeypatch.setenv("MCP_ADMIN_DEV_PRINCIPAL", "alice")
     monkeypatch.setattr(core, "client", FakeQdrant())
-    monkeypatch.setattr(core, "ACL", Acl(ACL_CONFIG))
+    monkeypatch.setattr(core, "ACCESS", FileAccess(Acl(ACL_CONFIG)))
     mcp = FastMCP("test-admin")
     register(mcp)
     with TestClient(mcp.http_app()) as tc:
@@ -323,7 +325,7 @@ def test_audit_csv_neutralizes_spreadsheet_formulas(monkeypatch, tmp_path):
     monkeypatch.setenv("MCP_ADMIN_AUTH", "dev")
     monkeypatch.setenv("MCP_ADMIN_DEV_PRINCIPAL", "alice")
     monkeypatch.setattr(core, "client", FakeQdrant())
-    monkeypatch.setattr(core, "ACL", Acl(ACL_CONFIG))
+    monkeypatch.setattr(core, "ACCESS", FileAccess(Acl(ACL_CONFIG)))
     mcp = FastMCP("test-admin")
     register(mcp)
     with TestClient(mcp.http_app()) as tc:

@@ -1,3 +1,4 @@
+from sediment_mcp.access import FileAccess
 import os
 
 # sediment_mcp.server requires these at import time; set before any test imports it.
@@ -22,7 +23,7 @@ def qdrant(monkeypatch):
     client.create_collection("acme", vectors_config=VectorParams(size=4, distance=Distance.COSINE), metadata={"sediment": index_contract("test-model", 4)})
     client.create_payload_index("acme", "ts", field_schema=PayloadSchemaType.INTEGER)
     monkeypatch.setattr(server, "client", client)
-    monkeypatch.setattr(server, "ACL", None)
+    monkeypatch.setattr(server, "ACCESS", FileAccess(None))
     return client
 
 

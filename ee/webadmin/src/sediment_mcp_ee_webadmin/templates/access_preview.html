@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% block title %}Review permissions — sediment{% endblock %}
+{% macro permission(state, account) -%}
+{% if account %}
+  {% if state is none %}<strong>Not registered</strong>{% else %}
+  <strong>{{ 'Enabled' if state.enabled else 'Disabled' }}</strong>
+  {% if state.github_id %}<p>GitHub ID {{ state.github_id }}</p>{% else %}<p>Static token account</p>{% endif %}
+  {% endif %}
+{% elif not state.read %}<strong>No data access</strong>
+{% else %}<strong>Can read</strong>
+  {% if state.spaces is none %}<p class="warn">All spaces, including private spaces</p>
+  {% else %}<p>{% for space in state.spaces %}<span class="badge">{{ space }}</span>{% endfor %}</p><p class="muted">Also reads org-visible manual notes.</p>{% endif %}
+  <p>Adding knowledge: {{ 'allowed' if state.add_knowledge else 'not allowed' }}<br>Publishing org-visible notes: {{ 'allowed' if state.publish_org else 'not allowed' }}</p>
+{% endif %}
+{%- endmacro %}
+{% block content %}
+<h1>Review access changes</h1><p>Compare live version {{ current.version }} with draft {{ draft.revision }} by {{ draft.author }}.</p>
+{% if error %}<div class="warn" role="alert">{{ error }}</div>{% endif %}
+{% if draft.base_version != current.version %}<div class="warn">The active version changed. Reload the editor before applying.</div>{% endif %}
+<div class="table-scroll"><table><tr><th>Person / collection</th><th>Live access</th><th>Proposed access</th></tr>
+{% for change in changes %}<tr><td><strong>{{ change.principal }}</strong><br>{{ change.collection }}</td><td>{{ permission(change.before, change.kind == 'account') }}</td><td>{{ permission(change.after, change.kind == 'account') }}</td></tr>
+{% else %}<tr><td colspan="3">No effective access changes. Group organization may still have changed.</td></tr>{% endfor %}</table></div>
+<details><summary>Full proposed document (advanced)</summary><pre class="yaml-view">{{ draft.document|tojson(indent=2) }}</pre></details>
+<p>Disabling an account blocks its next MCP call, including calls using existing tokens.</p>
+<form method="post" action="/admin/acl/apply" class="access-actions"><input type="hidden" name="csrf" value="{{ csrf }}"><input type="hidden" name="revision" value="{{ draft.revision }}"><input type="hidden" name="base_version" value="{{ draft.base_version }}"><button {% if error or not dirty or draft.base_version != current.version %}disabled{% endif %}>Apply this version</button><a href="/admin/acl">Continue editing</a></form>
+{% endblock %}

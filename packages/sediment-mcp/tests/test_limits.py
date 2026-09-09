@@ -1,3 +1,4 @@
+from sediment_mcp.access import FileAccess
 import anyio
 import pytest
 from starlette.requests import Request
@@ -106,7 +107,7 @@ def test_org_visibility_requires_unrestricted_writer(monkeypatch):
             ]
         }
     )
-    monkeypatch.setattr(server, "ACL", acl)
+    monkeypatch.setattr(server, "ACCESS", FileAccess(acl))
     monkeypatch.setattr(server, "current_principal", lambda: "carol")
 
     result = server.add_knowledge("acme", "text", "note.md", visibility="org")

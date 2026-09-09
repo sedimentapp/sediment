@@ -11,6 +11,7 @@ dependencies = [
     "qdrant-client",
     "sediment-mcp",
     "sediment-mcp-ee-license",
+    "sediment-mcp-ee-access",
 ]
 
 [project.entry-points."sediment_mcp.extensions"]

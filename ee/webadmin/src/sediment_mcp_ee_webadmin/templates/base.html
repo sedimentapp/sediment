@@ -86,6 +86,27 @@ textarea.editor { width: 100%; font: 13px/1.5 ui-monospace, "Cascadia Mono", mon
 pre.yaml-view { background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
   padding: .9rem 1.1rem; overflow-x: auto; font: 13px/1.5 ui-monospace, monospace; }
 </style>
+<style>
+.access-heading, .draft-bar, .access-actions { display: flex; gap: 1rem; align-items: center; justify-content: space-between; flex-wrap: wrap; }
+.draft-bar { border-left: 4px solid var(--accent); background: var(--panel); padding: 1rem 1.2rem; margin: 1rem 0; }
+.draft-bar p { margin: .25rem 0 0; }
+.access-sections { flex-wrap: wrap; margin: 1.4rem 0; }
+.access-form { display: grid; gap: .8rem; max-width: 46rem; margin: 1rem 0; }
+.access-form label { display: grid; gap: .25rem; }
+.access-form input[type="text"], .access-form textarea { min-width: 0; width: 100%; }
+.access-form label.check { display: flex; align-items: baseline; gap: .5rem; }
+.access-form button { justify-self: start; }
+.access-actions { justify-content: flex-start; margin: 1rem 0; }
+button.secondary { color: var(--accent); background: var(--accent-soft); }
+button:disabled { cursor: not-allowed; opacity: .5; }
+.action-link { font-weight: 650; text-decoration: underline; }
+details { border-bottom: 1px solid var(--border); padding: .8rem 0; }
+summary { cursor: pointer; font-weight: 600; }
+.table-scroll { overflow-x: auto; }
+.permission-json { white-space: pre-wrap; overflow-wrap: anywhere; font: .85rem/1.5 ui-monospace, monospace; }
+section { scroll-margin-top: 1rem; }
+@media (max-width: 640px) { body { padding: 1rem .75rem; } nav { flex-wrap: wrap; } input[type="text"] { min-width: 0; } }
+</style>
 </head>
 <body>
 <nav>

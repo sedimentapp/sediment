@@ -10,6 +10,7 @@ Environment:
     GITHUB_OAUTH_CLIENT_ID       GitHub OAuth App client id
     GITHUB_OAUTH_CLIENT_SECRET   GitHub OAuth App client secret
     MCP_GITHUB_ALLOWED_IDENTITIES comma-separated principal:GitHub-id entries
+                                 in file mode only; database mode reads active users
     MCP_ALLOWED_CLIENT_REDIRECT_URIS comma-separated MCP OAuth callback patterns
     MCP_AUTH_TOKEN_<PRINCIPAL>   optional named static bearer tokens accepted
                                  alongside OAuth (dev/emergency path); the
@@ -46,7 +47,7 @@ class AllowlistGitHubProvider(GitHubProvider):
     the numeric GitHub id must also be allowlisted.
     """
 
-    def __init__(self, *, allowed_identities: dict[str, str], **kwargs) -> None:
+    def __init__(self, *, allowed_identities: dict[str, str] | None, **kwargs) -> None:
         super().__init__(**kwargs)
         self._allowed_identities = allowed_identities
 
@@ -56,10 +57,16 @@ class AllowlistGitHubProvider(GitHubProvider):
             return None
         claims = access.claims or {}
         user_id = claims.get("sub")
-        principal = self._allowed_identities.get(str(user_id))
+        identities = self._allowed_identities
+        if identities is None:
+            from sediment_mcp.server import ACCESS
+            identities = ACCESS.snapshot().github_identities
+            if identities is None:
+                raise RuntimeError("Managed GitHub authentication requires database identities")
+        principal = identities.get(str(user_id))
         if principal is None:
             logger.warning(
-                "Rejected GitHub user id %r (login=%r): not in MCP_GITHUB_ALLOWED_IDENTITIES",
+                "Rejected GitHub user id %r (login=%r): no active registered identity",
                 user_id,
                 claims.get("login"),
             )
@@ -72,10 +79,14 @@ def provider() -> AuthProvider:
     base_url = _require_env("MCP_BASE_URL")
     client_id = _require_env("GITHUB_OAUTH_CLIENT_ID")
     client_secret = _require_env("GITHUB_OAUTH_CLIENT_SECRET")
-    allowed_identities = parse_github_identities(
-        _require_env("MCP_GITHUB_ALLOWED_IDENTITIES"),
-        "MCP_GITHUB_ALLOWED_IDENTITIES",
-    )
+    if os.environ.get("MCP_ACCESS_MODE", "file") == "database":
+        if os.environ.get("MCP_GITHUB_ALLOWED_IDENTITIES"):
+            raise RuntimeError("Managed identities must not be configured in the environment")
+        allowed_identities = None
+    else:
+        allowed_identities = parse_github_identities(
+            _require_env("MCP_GITHUB_ALLOWED_IDENTITIES"), "MCP_GITHUB_ALLOWED_IDENTITIES",
+        )
     allowed_redirect_uris = [
         uri.strip()
         for uri in _require_env("MCP_ALLOWED_CLIENT_REDIRECT_URIS").split(",")
