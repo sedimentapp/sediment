@@ -21,7 +21,7 @@ def validate(tag: str, root: Path) -> dict[str, str]:
     ).stdout.strip()
     if head != commit:
         raise ValueError("Checkout does not match the release tag")
-    for package in ("sediment", "knowledge-schema", "sediment-mcp"):
+    for package in ("sediment", "knowledge-schema"):
         project = tomllib.loads((root / "packages" / package / "pyproject.toml").read_text())["project"]
         if project["version"] != version:
             raise ValueError(f"Tag version {version} differs from {package} version {project['version']}")

@@ -69,8 +69,8 @@ Review the code for public suitability, then publish the matching code commit an
 version tag to GitHub through the existing approved process.
 
 `.github/workflows/release.yml` runs on a `v*` tag push or manually with an existing
-tag. It checks out `refs/tags/<tag>` explicitly, verifies that HEAD and all three
-application package versions match the tag, and requires version-specific release
+tag. It checks out `refs/tags/<tag>` explicitly, verifies that HEAD and both core
+package versions match the tag, and requires version-specific release
 notes. The tag must include this release tooling; older tags cannot acquire new
 workflow scripts retroactively.
 

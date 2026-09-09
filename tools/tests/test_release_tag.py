@@ -22,7 +22,8 @@ def checkout(tmp_path):
     for package in ("sediment", "knowledge-schema", "sediment-mcp"):
         path = tmp_path / "packages" / package / "pyproject.toml"
         path.parent.mkdir(parents=True)
-        path.write_text('[project]\nversion = "0.2.0rc1"\n')
+        version = "0.1.0" if package == "sediment-mcp" else "0.2.0rc1"
+        path.write_text(f'[project]\nversion = "{version}"\n')
     notes = tmp_path / "docs" / "release-notes-0.2.0rc1.md"
     notes.parent.mkdir()
     notes.write_text("Release candidate\n")
@@ -46,8 +47,8 @@ def test_wrong_checkout_rejected(checkout):
 
 
 def test_package_mismatch_rejected(checkout):
-    (checkout / "packages/sediment-mcp/pyproject.toml").write_text('[project]\nversion = "0.1.0"\n')
-    with pytest.raises(ValueError, match="sediment-mcp version"):
+    (checkout / "packages/knowledge-schema/pyproject.toml").write_text('[project]\nversion = "0.1.0"\n')
+    with pytest.raises(ValueError, match="knowledge-schema version"):
         release_tag.validate("v0.2.0rc1", checkout)
 
 
