@@ -17,12 +17,11 @@ from knowledge_schema import make_space
 
 from sediment._common import (
     HttpError,
+    consume_chat_post,
     http_get,
-    is_already_recorded,
-    last_post_ts_ms,
-    recorded_post_counts,
+    recorded_chat_posts,
     safe_path_component,
-    sanitize,
+    write_chat_fragment,
 )
 from sediment.sources import (
     FetchWindow,
@@ -366,21 +365,18 @@ def fetch_mattermost_posts(profile: dict[str, Any], since_dt: datetime, until_dt
             root_id = safe_path_component(root_id, "Mattermost thread id")
             existing = sorted(ch_dir.glob(f"{glob.escape(root_id)}.md")) + sorted(ch_dir.glob(f"{glob.escape(root_id)}.*.md"))
 
-            if existing:
-                last_known_ms = last_post_ts_ms(existing)
-                recorded = recorded_post_counts(existing)
-                posts.sort(key=lambda p: p.get("create_at", 0))
-                posts = [
-                    p
-                    for p in posts
-                    if p.get("create_at", 0) >= last_known_ms
-                    and not is_already_recorded(
-                        recorded,
-                        datetime.fromtimestamp(p.get("create_at", 0) / 1000).strftime("%Y-%m-%d %H:%M"),
-                    )
-                ]
-                if not posts:
-                    continue
+            recorded = recorded_chat_posts(existing)
+            rendered_posts = []
+            for post in sorted(posts, key=lambda p: p.get("create_at", 0)):
+                user_name = user_cache.get(post.get("user_id", ""), post.get("user_id", ""))
+                ts = post.get("create_at", 0)
+                ts_str = datetime.fromtimestamp(ts / 1000).strftime("%Y-%m-%d %H:%M") if ts else ""
+                rendered = f"**{user_name}** [{ts_str}]: {post['message']}"
+                if not consume_chat_post(recorded, rendered):
+                    rendered_posts.append((post, rendered))
+            if not rendered_posts:
+                continue
+            posts = [post for post, _ in rendered_posts]
 
             posts.sort(key=lambda p: p.get("create_at", 0))
             first_ts = posts[0].get("create_at", 0)
@@ -401,15 +397,12 @@ def fetch_mattermost_posts(profile: dict[str, Any], since_dt: datetime, until_dt
                 "",
             ]
 
-            for post in posts:
-                user_name = user_cache.get(post.get("user_id", ""), post.get("user_id", ""))
-                ts = post.get("create_at", 0)
-                ts_str = datetime.fromtimestamp(ts / 1000).strftime("%Y-%m-%d %H:%M") if ts else ""
-                lines.append(f"**{user_name}** [{ts_str}]: {post['message']}")
+            for _, rendered in rendered_posts:
+                lines.append(rendered)
                 lines.append("")
 
             ch_dir.mkdir(parents=True, exist_ok=True)
-            raw_file.write_text(sanitize("\n".join(lines)))
+            write_chat_fragment(raw_file, "\n".join(lines))
 
         if ch_new or ch_appended:
             print(f"  {ch_name}: {ch_new} new, {ch_appended} updated")

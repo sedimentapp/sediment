@@ -12,6 +12,39 @@ from typing import Any
 import yaml
 from dotenv import load_dotenv
 
+
+def recorded_chat_posts(files: list[Path]) -> Counter[str]:
+    """Match legacy raw posts by their rendered content, including multiline bodies."""
+    counts: Counter[str] = Counter()
+    header = re.compile(r"^\*\*.+?\*\* \[\d{4}-\d{2}-\d{2} \d{2}:\d{2}\]:", re.MULTILINE)
+    for path in files:
+        text = path.read_text()
+        starts = [match.start() for match in header.finditer(text)]
+        for index, start in enumerate(starts):
+            end = starts[index + 1] if index + 1 < len(starts) else len(text)
+            counts[sanitize(text[start:end]).rstrip()] += 1
+    return counts
+
+
+def consume_chat_post(counts: Counter[str], rendered: str) -> bool:
+    key = sanitize(rendered).rstrip()
+    if counts[key] > 0:
+        counts[key] -= 1
+        return True
+    return False
+
+
+def write_chat_fragment(path: Path, text: str) -> None:
+    """Minute-resolution fragment names can collide across separate fetches."""
+    candidate = path
+    suffix = 1
+    while candidate.exists():
+        candidate = path.with_name(f"{path.stem}.{suffix}{path.suffix}")
+        suffix += 1
+    # A concurrent writer must fail rather than replace an existing fragment.
+    with candidate.open("x") as stream:
+        stream.write(sanitize(text))
+
 # Matches the post-header line our fetchers write: **Author** [YYYY-MM-DD HH:MM]:
 # Used to find the latest known post timestamp across pre-existing raw files for a thread/session,
 # so subsequent runs can skip already-recorded posts and append only the new tail.

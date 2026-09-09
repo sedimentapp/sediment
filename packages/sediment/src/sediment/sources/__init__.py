@@ -26,12 +26,15 @@ from knowledge_schema import SPACE_KINDS
 
 from sediment._common import (
     HttpError,
+    consume_chat_post,
     http_get,
     is_already_recorded,
     last_post_ts_ms,
+    recorded_chat_posts,
     recorded_post_counts,
     safe_path_component,
     sanitize,
+    write_chat_fragment,
 )
 
 __all__ = [
@@ -41,13 +44,16 @@ __all__ = [
     "SpaceDerivationError",
     "SpaceExcluded",
     "add_dir_entry",
+    "consume_chat_post",
     "http_get",
     "is_already_recorded",
     "last_post_ts_ms",
     "read_space_kinds",
+    "recorded_chat_posts",
     "recorded_post_counts",
     "safe_path_component",
     "sanitize",
+    "write_chat_fragment",
     "write_space_kinds",
 ]
 

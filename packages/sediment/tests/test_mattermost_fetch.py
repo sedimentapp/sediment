@@ -67,6 +67,51 @@ def test_thread_is_written_once(tmp_path, profile, monkeypatch):
     assert "**Alice Doe** [2026-07-17 10:00]: The gateway is dropping tunnels again." in text
 
 
+def test_historical_backfill_preserves_existing_and_repeats_cleanly(tmp_path, profile, monkeypatch):
+    messages = [
+        post("early", at(9, 0, 5), "u1", "Earlier history."),
+        post("same", at(10, 0, 5), "u1", "Earlier in the same minute."),
+        post("recent", at(10, 0, 30), "u1", "Already saved."),
+    ]
+    install_http(monkeypatch, messages[2:])
+    mm.fetch_mattermost_posts(profile, SINCE, UNTIL)
+    raw = tmp_path / "vault" / "raw" / "mattermost" / "infra"
+    before = {p: p.read_bytes() for p in raw.glob("*.md")}
+    install_http(monkeypatch, messages)
+    mm.fetch_mattermost_posts(profile, SINCE, UNTIL)
+    for message in messages:
+        assert thread_text(tmp_path).count(message["message"]) == 1
+    assert all(p.read_bytes() == content for p, content in before.items())
+    snapshot = {p: p.read_bytes() for p in raw.glob("*.md")}
+    mm.fetch_mattermost_posts(profile, SINCE, UNTIL)
+    assert {p: p.read_bytes() for p in raw.glob("*.md")} == snapshot
+
+
+def test_multiple_appends_in_same_minute_do_not_overwrite(tmp_path, profile, monkeypatch):
+    messages = [post(str(i), at(10, 0, i), "u1", f"Message number {i}.") for i in range(1, 5)]
+    for count in range(1, 5):
+        install_http(monkeypatch, messages[:count])
+        mm.fetch_mattermost_posts(profile, SINCE, UNTIL)
+    for message in messages:
+        assert thread_text(tmp_path).count(message["message"]) == 1
+
+
+def test_multiline_redacted_posts_and_identical_messages_repeat_cleanly(tmp_path, profile, monkeypatch):
+    messages = [
+        post("p1", at(10, 0, 1), "u1", "First line.\n\nSecond line. token=private-value"),
+        post("p2", at(10, 0, 2), "u1", "Same reply."),
+        post("p3", at(10, 0, 3), "u1", "Same reply."),
+    ]
+    install_http(monkeypatch, messages)
+    mm.fetch_mattermost_posts(profile, SINCE, UNTIL)
+    raw = tmp_path / "vault" / "raw" / "mattermost" / "infra"
+    snapshot = {p: p.read_bytes() for p in raw.glob("*.md")}
+    mm.fetch_mattermost_posts(profile, SINCE, UNTIL)
+    assert {p: p.read_bytes() for p in raw.glob("*.md")} == snapshot
+    assert thread_text(tmp_path).count("Same reply.") == 2
+    assert "private-value" not in thread_text(tmp_path)
+
+
 def test_reply_in_the_boundary_minute_is_neither_duplicated_nor_lost(tmp_path, profile, monkeypatch):
     """Raw files hold minute precision, so replies sharing the last recorded minute
     are the case that a naive "strictly newer than the max ts" filter gets wrong."""
