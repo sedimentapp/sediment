@@ -62,22 +62,36 @@ modify the active environment. It is not offline: third-party packages need an i
 or cache. Preserve the tested archive; timestamped archive bytes are not promised
 to be identical across rebuilds even with the same pinned build dependencies.
 
-## Public promotion
+## GitHub releases
 
 First validate the candidate on the installation and complete its migrations.
 Review the code for public suitability, then publish the matching code commit and
-version tag to GitHub through the existing approved process. Public promotion does
-not copy the installation repository or rebuild wheels.
+version tag to GitHub through the existing approved process.
 
-The manual `.github/workflows/release.yml` takes the tested archive URL, its SHA-256,
-and an existing `vVERSION` tag. It needs `CORE_BUNDLE_USER` and a read-only
-`CORE_BUNDLE_READ_TOKEN` to download from an authenticated artifact store. `tools/prepare-release.py` verifies
-the checksum, manifest, core-only file/package set, clean source provenance, version,
-and tag commit. It creates a draft GitHub release containing the exact tested archive.
-The composition checks do not prove absence of sensitive text inside allowed files:
-public code review remains necessary. Review the draft and release notes before
-publishing. Enable GitHub release immutability for accepted public releases.
+`.github/workflows/release.yml` runs on a `v*` tag push or manually with an existing
+tag. It checks out `refs/tags/<tag>` explicitly, verifies that HEAD and all three
+application package versions match the tag, and requires version-specific release
+notes. The tag must include this release tooling; older tags cannot acquire new
+workflow scripts retroactively.
+
+GitHub installs pinned uv and Python 3.14, runs the source tests and static checks,
+then builds its own core bundle. The builder tests the installed wheels in a clean
+environment. `tools/prepare-release.py` verifies the resulting checksum, public
+manifest, clean provenance and tag commit before creating a draft release with
+`core.tar.gz`, its SHA-256 file and `release.json`. Non-stable version tags create
+prerelease drafts. Existing releases are not overwritten; another build of the
+same version must not replace accepted release assets.
+
+Only the repository's automatic `GITHUB_TOKEN` is needed to create the draft.
+No external artifact URL, download credential or pre-existing archive is required.
+The public bundle is built from the tagged commit but is not promised to match an
+installation candidate byte-for-byte. Each build has its own checksum and tests;
+installation composition still reuses the exact core wheels it pins.
+
+The package/file allowlist does not establish absence of sensitive text within
+allowed files. Review public source changes and the draft before publishing.
+Enable GitHub release immutability for accepted public releases.
 
 Version package manifests together for a core release. The pipeline's dependency
 on knowledge-schema is exact; plugin versions are independent. Update the release
-notes and workflow notes-file when selecting the next release version.
+notes at `docs/release-notes-VERSION.md` when selecting the next release version.

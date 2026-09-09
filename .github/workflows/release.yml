@@ -1,16 +1,13 @@
-name: Promote tested core release
+name: Build core release from tag
 
 on:
+  push:
+    tags: ["v*"]
   workflow_dispatch:
     inputs:
-      core_url:
-        description: HTTPS URL of the tested core archive
-        required: true
-      sha256:
-        description: SHA-256 recorded when the candidate was tested
-        required: true
       tag:
-        description: Existing vVERSION tag pointing to the tested commit
+        description: Existing vVERSION tag to build
+        type: string
         required: true
 
 jobs:
@@ -20,29 +17,65 @@ jobs:
     permissions:
       contents: write
     steps:
+      - name: Select release tag
+        id: target
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_TAG: ${{ inputs.tag }}
+          PUSH_REF: ${{ github.ref }}
+        run: |
+          set -euo pipefail
+          case "$EVENT_NAME" in
+            workflow_dispatch) tag="$INPUT_TAG" ;;
+            push)
+              [[ "$PUSH_REF" == refs/tags/* ]]
+              tag="${PUSH_REF#refs/tags/}"
+              ;;
+            *) echo "Unsupported release event: $EVENT_NAME" >&2; exit 1 ;;
+          esac
+          [[ "$tag" =~ ^v[0-9][0-9A-Za-z.+-]*$ ]]
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
+          ref: refs/tags/${{ steps.target.outputs.tag }}
           fetch-depth: 0
           persist-credentials: false
-      - name: Download tested archive
+      - name: Validate tag, package versions and release notes
+        id: release
         env:
-          CORE_URL: ${{ inputs.core_url }}
-          CORE_USER: ${{ vars.CORE_BUNDLE_USER }}
-          CORE_TOKEN: ${{ secrets.CORE_BUNDLE_READ_TOKEN }}
+          RELEASE_TAG: ${{ steps.target.outputs.tag }}
         run: |
           set -eu
-          test -n "$CORE_USER"
-          test -n "$CORE_TOKEN"
-          curl --fail --silent --show-error --proto '=https' --tlsv1.2 --user "$CORE_USER:$CORE_TOKEN" --output /tmp/core.tar.gz "$CORE_URL"
+          python3 tools/check-release-tag.py --tag "$RELEASE_TAG" --github-output "$GITHUB_OUTPUT"
+      - name: Install pinned build toolchain
+        uses: astral-sh/setup-uv@e58605a9b6da7c637471fab8847a5e5a6b8df081 # v5
+        with:
+          version: "0.10.8"
+          python-version: "3.14"
+      - name: Test and build public core
+        run: |
+          set -eu
+          uv sync --locked --all-packages --no-default-groups --group test
+          uv run --no-sync pytest packages ee tools/tests
+          uv run --no-sync --with ruff==0.15.11 ruff check .
+          uv run --no-sync --with basedpyright==1.39.3 basedpyright packages ee tools
+          uv run --no-sync python tools/release.py build-core --root . --output dist/core
       - name: Verify archive and tag
         env:
-          CORE_SHA256: ${{ inputs.sha256 }}
-          RELEASE_TAG: ${{ inputs.tag }}
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
         run: |
-          python3 tools/prepare-release.py --archive /tmp/core.tar.gz --sha256 "$CORE_SHA256" --tag "$RELEASE_TAG" --output /tmp/promotion
-      - name: Create draft with the original tested archive
+          set -eu
+          read -r core_sha archive_name < dist/core.tar.gz.sha256
+          test "$archive_name" = core.tar.gz
+          uv run --no-sync python tools/prepare-release.py --archive dist/core.tar.gz --sha256 "$core_sha" --tag "$RELEASE_TAG" --output "$RUNNER_TEMP/promotion"
+      - name: Create release draft
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          RELEASE_TAG: ${{ inputs.tag }}
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+          RELEASE_NOTES: ${{ steps.release.outputs.notes }}
+          PRERELEASE: ${{ steps.release.outputs.prerelease }}
         run: |
-          gh release create "$RELEASE_TAG" --verify-tag --draft --title "$RELEASE_TAG" --notes-file docs/release-notes-0.2.0rc1.md /tmp/promotion/core.tar.gz /tmp/promotion/core.tar.gz.sha256 /tmp/promotion/release.json
+          set -euo pipefail
+          flags=()
+          if [ "$PRERELEASE" = true ]; then flags+=(--prerelease); fi
+          gh release create "$RELEASE_TAG" --verify-tag --draft "${flags[@]}" --title "$RELEASE_TAG" --notes-file "$RELEASE_NOTES" "$RUNNER_TEMP/promotion/core.tar.gz" "$RUNNER_TEMP/promotion/core.tar.gz.sha256" "$RUNNER_TEMP/promotion/release.json"
