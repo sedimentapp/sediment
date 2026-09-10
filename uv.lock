@@ -920,7 +920,7 @@ wheels = [
 
 [[package]]
 name = "knowledge-schema"
-version = "0.2.0rc1"
+version = "0.2.0rc2"
 source = { editable = "packages/knowledge-schema" }
 
 [package.dev-dependencies]
@@ -2007,7 +2007,7 @@ wheels = [
 
 [[package]]
 name = "sediment"
-version = "0.2.0rc1"
+version = "0.2.0rc2"
 source = { editable = "packages/sediment" }
 dependencies = [
     { name = "httpx" },
@@ -2050,7 +2050,7 @@ test = [{ name = "pytest", specifier = ">=8" }]
 
 [[package]]
 name = "sediment-mcp"
-version = "0.1.0"
+version = "0.2.0rc2"
 source = { editable = "packages/sediment-mcp" }
 dependencies = [
     { name = "fastmcp" },
@@ -2077,7 +2077,7 @@ test = [{ name = "pytest", specifier = ">=8" }]
 
 [[package]]
 name = "sediment-mcp-ee-access"
-version = "0.1.0"
+version = "0.2.0rc2"
 source = { editable = "ee/access" }
 dependencies = [
     { name = "pyyaml" },
@@ -2094,7 +2094,7 @@ requires-dist = [
 
 [[package]]
 name = "sediment-mcp-ee-auth"
-version = "0.1.0"
+version = "0.2.0rc2"
 source = { editable = "ee/auth" }
 dependencies = [
     { name = "fastmcp" },
@@ -2113,7 +2113,7 @@ requires-dist = [
 
 [[package]]
 name = "sediment-mcp-ee-license"
-version = "0.1.0"
+version = "0.2.0rc2"
 source = { editable = "ee/license" }
 dependencies = [
     { name = "fastmcp" },
@@ -2138,7 +2138,7 @@ test = [{ name = "pytest", specifier = ">=8" }]
 
 [[package]]
 name = "sediment-mcp-ee-webadmin"
-version = "0.1.0"
+version = "0.2.0rc2"
 source = { editable = "ee/webadmin" }
 dependencies = [
     { name = "fastmcp" },

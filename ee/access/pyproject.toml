@@ -1,6 +1,6 @@
 [project]
 name = "sediment-mcp-ee-access"
-version = "0.1.0"
+version = "0.2.0rc2"
 description = "Versioned managed identities and access policies for sediment-mcp"
 license = "Elastic-2.0"
 requires-python = ">=3.14"

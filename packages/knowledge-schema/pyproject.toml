@@ -1,6 +1,6 @@
 [project]
 name = "knowledge-schema"
-version = "0.2.0rc1"
+version = "0.2.0rc2"
 description = "Shared knowledge-base contract (sources, embed) between sediment and sediment-mcp"
 license = "Apache-2.0"
 requires-python = ">=3.14"

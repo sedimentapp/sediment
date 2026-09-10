@@ -1,6 +1,6 @@
 [project]
 name = "sediment-mcp-ee-auth"
-version = "0.1.0"
+version = "0.2.0rc2"
 description = "OAuth auth providers for sediment-mcp (ee)"
 license = "Elastic-2.0"
 requires-python = ">=3.14"

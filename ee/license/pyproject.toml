@@ -1,6 +1,6 @@
 [project]
 name = "sediment-mcp-ee-license"
-version = "0.1.0"
+version = "0.2.0rc2"
 description = "ee license verification for sediment-mcp (flat: one license enables all ee features)"
 license = "Elastic-2.0"
 requires-python = ">=3.14"

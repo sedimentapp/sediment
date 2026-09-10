@@ -1,6 +1,6 @@
 [project]
 name = "sediment-mcp"
-version = "0.1.0"
+version = "0.2.0rc2"
 description = "MCP server exposing sediment's Qdrant knowledge base over Streamable HTTP"
 license = "Apache-2.0"
 requires-python = ">=3.14"
