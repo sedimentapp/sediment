@@ -5,7 +5,7 @@ description = "OAuth auth providers for sediment-mcp (ee)"
 license = "Elastic-2.0"
 requires-python = ">=3.14"
 dependencies = [
-    "fastmcp>=3,<4",
+    "fastmcp>=3.4.8,<4",
     "sediment-mcp",
     "sediment-mcp-ee-license",
     "sediment-mcp-ee-access",

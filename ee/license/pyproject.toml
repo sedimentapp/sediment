@@ -5,7 +5,7 @@ description = "ee license verification for sediment-mcp (flat: one license enabl
 license = "Elastic-2.0"
 requires-python = ">=3.14"
 dependencies = [
-    "fastmcp>=3,<4",
+    "fastmcp>=3.4.8,<4",
     "pyjwt[crypto]>=2",
     "sediment-mcp",
 ]

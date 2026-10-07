@@ -83,3 +83,18 @@ def test_provider_requires_redirect_allowlist(monkeypatch):
 
     with pytest.raises(RuntimeError, match="MCP_ALLOWED_CLIENT_REDIRECT_URIS"):
         github_mod.provider()
+
+
+def test_cimd_token_endpoint_has_no_double_slash():
+    # private_key_jwt assertions from CIMD clients carry aud=<issuer>/token;
+    # fastmcp < 3.4.8 joined the trailing-slash base URL into "//token".
+    provider = AllowlistGitHubProvider(
+        allowed_identities={"10001": "alice"},
+        allowed_client_redirect_uris=["http://localhost:*"],
+        client_id="cid",
+        client_secret="secret",
+        base_url="https://mcp.example",
+        jwt_signing_key="k" * 32,
+    )
+
+    assert provider.token_endpoint_url == "https://mcp.example/token"
